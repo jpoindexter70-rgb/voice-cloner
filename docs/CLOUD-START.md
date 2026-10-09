@@ -1,0 +1,21 @@
+# Startup instructions for cloud tasks
+
+Use the existing `/workspace/voice-cloner` checkout. Each cloud task is already isolated; do not create a Git worktree unless the user explicitly requests one. Keep personal recordings out of test fixtures and preserve existing data.
+
+The retained environment is `.venv-311` with Python 3.11 under `.runtime/python`; dependencies use requirements-engine.txt, constraints-engine.txt, and requirements-dev.txt. Persistent studio data and downloaded checkpoints are in `.runtime/studio-data`. Processes must be started again after snapshot restoration; do not assume the previous server is alive. Native Windows uses the supplied batch launcher and Windows user data directory instead.
+
+1. Work in `/workspace/voice-cloner`. Set:
+   ```bash
+   export VCR_DATA_DIR=/workspace/voice-cloner/.runtime/studio-data
+   export HF_HOME=/workspace/voice-cloner/.runtime/huggingface
+   export NUMBA_CACHE_DIR=/workspace/voice-cloner/.runtime/numba
+   ```
+2. Confirm `.venv-311/bin/python -m pip check`. If tools/dependencies are missing, run `bash scripts/cloud-install.sh`. Its model-download stage needs the saved Hugging Face domains applied to runtime networking. It stops on a denied request; do not disable TLS/checksum verification or invent credentials. Back up existing personal data before repair; do not delete profiles or recordings.
+3. With the server closed, verify `.venv-311/bin/python -m studio.cli verify-models --engine all`. Missing files require `.venv-311/bin/python -m studio.cli download-models --engine all` while online. In onboarding the cloud egress proxy returned HTTP 403; imports and watermark prerequisites are validated, but TTS inference is not yet validated. Read `docs/TESTING.md`. An unset token is not evidence that credentials are required.
+4. For normal voice synthesis start `.venv-311/bin/python -m studio.cli serve --no-browser --load-engine`. This verifies the selected model, loads one local engine, binds only to loopback port 8765, and blocks duplicate instances. Keep it in a managed shell session or capture its output to a local log. Auto chooses CUDA if present and falls back to CPU on a CUDA memory error. This cloud machine has no GPU.
+5. If model access remains blocked, useful application development can continue with `.venv-311/bin/python -m studio.cli serve --no-browser`. This starts recording/profile/editor workflows and provides actionable missing-model errors. Do not describe this as a working voice-cloning engine.
+6. Readiness requires a functional request, not only a PID/port. Use a local HTTP client: check `/api/health` returns `application: voice-control-room-advanced`, GET `/` to establish a local session cookie, and GET `/api/profiles` to confirm persistent My Voice metadata. `/api/diagnostics` reports packages, GPU, memory, model files, storage, missing/unindexed recordings. For mutations obtain `/api/session` and send its token as `X-VCR-Token`, retaining the cookie; never log the token. Perform an actual reference import/playback/export check with an isolated fixture when relevant.
+7. `.venv-311/bin/python -m pytest -q` runs the backend and real packaged-watermarker checks. Linux browser testing is documented in `docs/TESTING.md`; run against isolated fixture data, not personal recordings. Real inference/voice quality requires installed checkpoints and an authorized speech reference; follow `docs/ENGINE-EVALUATION.md`. Do not equate adapter tests with synthesis.
+8. Stop only servers you started: Ctrl+C in the managed session, or the same-origin `/api/shutdown` route with its local cookie/token. It refuses shutdown during engine work. Backups/model repairs acquire an exclusive studio lock; wait for shutdown before using them. Existing verified servers can be reused by the launcher; never kill a different process occupying the port.
+
+Do not create loopback web previews or user-facing localhost links in cloud onboarding. Use internal requests and report evidence. Windows microphone/ACL/launcher behavior and RTX 2060 memory fit remain separate hardware acceptance checks. Saved setup instructions are draft configuration; publication and validation in a fresh cloud task are not established by the current-instance checks.

@@ -1,0 +1,4 @@
+-c constraints-engine.txt
+-r requirements.txt
+chatterbox-tts==0.1.7
+setuptools==78.1.0

@@ -5,6 +5,13 @@ function Run-Python([string[]]$Arguments) {
     & $script:Python @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Python command failed. Read the error above. Existing voice data has not been deleted." }
 }
+# Serialize updated installers so a second setup cannot mutate a backup source.
+$InstallMutex = New-Object System.Threading.Mutex($false, 'Local\VoiceControlRoomAdvancedInstaller')
+$InstallLockHeld = $false
+try {
+    try { $InstallLockHeld = $InstallMutex.WaitOne(0) }
+    catch [System.Threading.AbandonedMutexException] { $InstallLockHeld = $true }
+    if (-not $InstallLockHeld) { throw 'Another Voice Control Room installer is running. Close it before starting another installation.' }
 Write-Host 'VOICE CONTROL ROOM ADVANCED - backup-first installation / repair'
 Write-Host '[1/8] Checking Python 3.11... '
 if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
@@ -119,3 +126,8 @@ try {
     Write-Host ('Installation finished. Double-click the new desktop shortcut, or ' + (Join-Path $Target 'Start Voice Control Room.cmd'))
     Write-Host 'Previous installation files were backed up. Existing voice files need explicit import; unknown profile formats are not migrated automatically.'
 } finally { Pop-Location }
+
+} finally {
+    if ($InstallLockHeld) { $InstallMutex.ReleaseMutex() }
+    $InstallMutex.Dispose()
+}

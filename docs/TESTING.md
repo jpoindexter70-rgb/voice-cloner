@@ -68,3 +68,9 @@ Do not mark unrun checks passed. Any model/hardware defect found here should be 
 ## Installer feedback repair
 
 After a user reported a window displaying only the installation title, numbered installer stages and streaming backup/CRC-verification progress were added. The preinstall backup preservation test was rerun and passed. The initial Python launcher check now has a 20-second timeout. These PowerShell/batch changes are not executed on native Windows here; the screenshot alone does not establish whether Python startup or the old silent backup caused the apparent stall.
+
+## Backup source disappearance repair
+
+A subsequent Windows screenshot showed WinError 3 while backing up a pkg_resources file in an older version's virtual environment. The root cause on that machine is not proven. The backup now records source metadata, streams and verifies archive CRCs, checks the final source inventory, and retries once after a disappeared/changed source file. Failed attempts are retained as explicitly incomplete archives and are never reported as verified full backups. Two updated installers are serialized with a Windows named mutex.
+
+Three focused Python tests passed after this change: existing preinstall archive preservation, simulated dependency-file disappearance with the reference recording preserved, and continuous source changes causing a bounded failure without a verified-backup claim. Native Windows mutex behavior and successful retry on the user's machine remain unrun here. The earlier 18-test full-suite results above refer to the earlier run; no new full-suite count is claimed for this focused change.

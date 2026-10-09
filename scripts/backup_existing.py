@@ -1,4 +1,5 @@
 """Standard-library backup: visible progress, stable inventory, and one bounded retry."""
+import argparse
 import os
 import sys
 import time
@@ -105,8 +106,45 @@ def backup(source, destination):
             print('Refreshing the inventory and retrying once. Missing files are not silently skipped; any existing incomplete archive is retained.', flush=True)
 
 
+def verify_existing(source, destination):
+    """Revalidate a previous archive; does not claim it captures current changes."""
+    source, destination = Path(source).resolve(), Path(destination).resolve()
+    candidates = [p for p in destination.glob(source.name + '-*.zip')
+                  if not p.name.endswith('.incomplete.zip')]
+    if not candidates:
+        raise RuntimeError('No previous backup archive for ' + str(source) + '. Use Install or Repair.cmd instead.')
+    # Filenames carry the creation timestamp; copying an older ZIP must not make it newest.
+    target = max(candidates, key=lambda p: p.name)
+    print('Rechecking previous backup:', target, flush=True)
+    checked = 0
+    reported = time.monotonic()
+    with zipfile.ZipFile(target) as archive:
+        entries = archive.infolist()
+        total = sum(entry.file_size for entry in entries)
+        if source.is_dir() and any(source.iterdir()) and not entries:
+            raise RuntimeError('Previous archive is empty. Use Install or Repair.cmd.')
+        for index, entry in enumerate(entries, 1):
+            with archive.open(entry) as file:
+                while chunk := file.read(1024 * 1024):
+                    checked += len(chunk)
+                    if time.monotonic() - reported >= 2:
+                        print(f'Archive verification: {checked / 1024**3:.2f} / {total / 1024**3:.2f} GB; file {index}/{len(entries)}.', flush=True)
+                        reported = time.monotonic()
+    print('PREVIOUS ARCHIVE INTEGRITY VERIFIED:', target, flush=True)
+    print('This preserves the earlier backup state, not files changed since that backup.', flush=True)
+    return target
+
+
 def main():
-    backup(*sys.argv[1:3])
+    parser = argparse.ArgumentParser(description='Back up files or recheck a prior archive to resume installation.')
+    parser.add_argument('source')
+    parser.add_argument('destination')
+    parser.add_argument('--verify-existing', action='store_true')
+    args = parser.parse_args()
+    if args.verify_existing:
+        verify_existing(args.source, args.destination)
+    else:
+        backup(args.source, args.destination)
 
 
 if __name__ == '__main__':

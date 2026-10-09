@@ -49,3 +49,29 @@ def test_continuously_changing_file_stops_without_claiming_verified_backup(tmp_p
     assert len(list(destination.glob('*.incomplete.zip')))==2
     assert 'VERIFIED BACKUP:' not in capsys.readouterr().out
     assert not [p for p in destination.glob('*.zip') if not p.name.endswith('.incomplete.zip')]
+
+
+def test_resume_rechecks_archive_without_copying_or_changing_current_files(tmp_path,capsys):
+    source=tmp_path/'VoiceControlRoom';source.mkdir()
+    reference=source/'voice.wav';reference.write_bytes(b'saved reference')
+    destination=tmp_path/'backups'
+    result=backup.backup(source,destination)
+    (destination/'VoiceControlRoom-99999999.incomplete.zip').write_bytes(b'not a verified archive')
+    before=result.read_bytes()
+    reference.write_bytes(b'a new reference recorded after the backup')
+    checked=backup.verify_existing(source,destination)
+    assert checked==result and result.read_bytes()==before
+    assert reference.read_bytes()==b'a new reference recorded after the backup'
+    assert len(list(destination.glob('*.zip')))==2
+    assert 'not files changed since that backup' in capsys.readouterr().out
+
+
+def test_resume_rejects_missing_or_corrupt_archives(tmp_path):
+    source=tmp_path/'VoiceControlRoom';source.mkdir();(source/'voice.wav').write_bytes(b'preserve')
+    destination=tmp_path/'backups';destination.mkdir()
+    with pytest.raises(RuntimeError,match='No previous backup'):
+        backup.verify_existing(source,destination)
+    (destination/'VoiceControlRoom-20261009.zip').write_bytes(b'corrupt')
+    with pytest.raises(zipfile.BadZipFile):
+        backup.verify_existing(source,destination)
+    assert (source/'voice.wav').read_bytes()==b'preserve'

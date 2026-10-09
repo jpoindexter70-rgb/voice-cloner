@@ -1,4 +1,4 @@
-param([string]$Target = 'C:\VoiceCloner')
+param([string]$Target = 'C:\VoiceCloner', [switch]$ResumeVerifiedBackup)
 $ErrorActionPreference = 'Stop'
 $Source = Split-Path -Parent $PSScriptRoot
 function Run-Python([string[]]$Arguments) {
@@ -42,7 +42,11 @@ $script:Python = 'py'
 function Backup-Folder([string]$Folder) {
     if (-not (Test-Path $Folder)) { return }
     $BackupRoot = Join-Path $env:LOCALAPPDATA 'VoiceControlRoom-Backups'
-    & py -3.11 (Join-Path $Source 'scripts\backup_existing.py') $Folder $BackupRoot
+    if ($ResumeVerifiedBackup) {
+        & py -3.11 (Join-Path $Source 'scripts\backup_existing.py') $Folder $BackupRoot '--verify-existing'
+    } else {
+        & py -3.11 (Join-Path $Source 'scripts\backup_existing.py') $Folder $BackupRoot
+    }
     if ($LASTEXITCODE -ne 0) { throw 'Backup failed. No installation files will be overwritten.' }
 }
 # Refuse repair while the server or its retained lock is active.
@@ -52,7 +56,11 @@ if (Test-Path (Join-Path $Data 'server.lock')) {
     catch { throw 'Close Voice Control Room before installation, backup, or repair.' }
     finally { if ($LockCheck) { $LockCheck.Dispose() } }
 }
-Write-Host '[3/8] Backing up existing files. Large installations may take several minutes.'
+if ($ResumeVerifiedBackup) {
+    Write-Host '[3/8] Rechecking previous backup archives. No new full backup will be copied.'
+} else {
+    Write-Host '[3/8] Backing up existing files. Large installations may take several minutes.'
+}
 Backup-Folder $Target
 Backup-Folder $Data
 Write-Host '[4/8] Preparing a separate installation folder... '
@@ -61,7 +69,7 @@ New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $Target = Join-Path $Target ('VoiceControlRoomAdvanced-' + (Get-Date -Format 'yyyyMMdd-HHmmss-ffff'))
 New-Item -ItemType Directory -Path $Target | Out-Null
 if ($Source -ne $Target) {
-    foreach ($Name in @('studio','scripts','docs','tests','requirements.txt','requirements-engine.txt','requirements-dev.txt','constraints-engine.txt','README.md','Start Voice Control Room.cmd','Install or Repair.cmd','Download Models.cmd','Backup Data.cmd','Diagnostics.cmd')) {
+    foreach ($Name in @('studio','scripts','docs','tests','requirements.txt','requirements-engine.txt','requirements-dev.txt','constraints-engine.txt','README.md','Start Voice Control Room.cmd','Install or Repair.cmd','Resume Installation.cmd','Download Models.cmd','Backup Data.cmd','Diagnostics.cmd')) {
         $Item = Join-Path $Source $Name
         if (Test-Path $Item) { Copy-Item $Item -Destination $Target -Recurse -Force }
     }
@@ -75,19 +83,22 @@ function Protect-Folder([string]$Folder) {
     $Items = @((Get-Item $Folder)) + @(Get-ChildItem $Folder -Recurse -Force)
     foreach ($Item in $Items) {
         if ($Item.PSIsContainer) {
-            $Acl = New-Object System.Security.AccessControl.DirectorySecurity
             $Flags = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
         } else {
-            $Acl = New-Object System.Security.AccessControl.FileSecurity
             $Flags = [System.Security.AccessControl.InheritanceFlags]::None
         }
+        # Read/write only the DACL. Preserve owner and audit/SACL settings.
+        # Fresh security descriptors with Set-Acl can request SeSecurityPrivilege.
+        $Acl = $Item.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
         $Acl.SetAccessRuleProtection($true, $false)
-        $Acl.SetOwner($UserSid)
+        foreach ($ExistingRule in @($Acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+            $Acl.RemoveAccessRuleSpecific($ExistingRule)
+        }
         foreach ($Sid in $Allowed) {
             $Rule = New-Object System.Security.AccessControl.FileSystemAccessRule($Sid, 'FullControl', $Flags, 'None', 'Allow')
             $Acl.AddAccessRule($Rule)
         }
-        Set-Acl -LiteralPath $Item.FullName -AclObject $Acl
+        $Item.SetAccessControl($Acl)
     }
 }
 Write-Host '[5/8] Securing voice data and backup folders... '

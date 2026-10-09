@@ -64,3 +64,7 @@ For browser testing on Linux with system Chromium, start an isolated test server
 8. Test CPU explicitly and Auto on the RTX 2060. Report actual memory behavior; the test adapter’s simulated memory error is not evidence of hardware fallback.
 
 Do not mark unrun checks passed. Any model/hardware defect found here should be diagnosed before calling the project complete.
+
+## Installer feedback repair
+
+After a user reported a window displaying only the installation title, numbered installer stages and streaming backup/CRC-verification progress were added. The preinstall backup preservation test was rerun and passed. The initial Python launcher check now has a 20-second timeout. These PowerShell/batch changes are not executed on native Windows here; the screenshot alone does not establish whether Python startup or the old silent backup caused the apparent stall.

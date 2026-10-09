@@ -66,3 +66,9 @@ The server can run without `--load-engine` to develop/import/edit audio before m
 Run `.venv/bin/python -m pytest -q` for backend tests. The synthetic Chromium test is in `tests/browser_smoke.py`; see [TESTING](docs/TESTING.md) for setup. Test-generated tones and fake microphone audio are not evidence of cloned-voice quality.
 
 See [engine evaluation](docs/ENGINE-EVALUATION.md), [recovery](docs/RECOVERY.md), and [acceptance testing](docs/TESTING.md). No changes have been pushed to GitHub automatically.
+
+## If the installer appears inactive
+
+The installer now prints numbered stages before Python checking, backup, folder setup, permissions, environment creation, package installation, and model downloads. Backup and archive verification display progress even while processing a large individual model file. The initial Python check fails with an actionable error after 20 seconds rather than waiting indefinitely. If you have an earlier ZIP showing only the installation title, download the latest ZIP into a separate folder; do not run two installers concurrently. Stop the previous installer with Ctrl+C before restarting. Interrupting backup does not delete source files; an incomplete ZIP must not be treated as a verified backup.
+
+Report the last numbered stage and any error text. A stage label indicates what is running, not that it has passed. Windows behavior of these updated launcher/PowerShell steps still needs validation on your computer.

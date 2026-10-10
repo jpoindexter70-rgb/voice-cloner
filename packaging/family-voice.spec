@@ -2,7 +2,8 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 from pathlib import Path
 
 root = Path(SPECPATH).parent
-datas = [(str(root / 'studio/static'), 'studio/static'), (str(root / 'docs/THIRD-PARTY-NOTICES.md'), 'licenses')]
+datas = [(str(root / 'studio/static'), 'studio/static'), (str(root / 'studio/model-revisions.json'), 'studio'),
+    (str(root / 'docs/THIRD-PARTY-NOTICES.md'), 'licenses')]
 binaries = []
 hiddenimports = ['uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto',
     'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan.on', 'PySide6.QtWebEngineWidgets',
@@ -13,7 +14,7 @@ for package in ['perth', 'chatterbox', 'imageio_ffmpeg', 's3tokenizer', 'librosa
     datas += data
     binaries += binary
     hiddenimports += imports
-datas += collect_data_files('transformers')
+datas += collect_data_files('transformers', include_py_files=True)
 datas += collect_data_files('tokenizers')
 for distribution in ['chatterbox-tts', 'resemble-perth', 'setuptools', 'imageio-ffmpeg', 'backports.tarfile']:
     datas += copy_metadata(distribution)
@@ -23,6 +24,7 @@ hiddenimports += collect_submodules('transformers.models.gpt2')
 a = Analysis([str(root / 'scripts/desktop_entry.py')], pathex=[str(root)], binaries=binaries,
     datas=datas, hiddenimports=hiddenimports,
     excludes=['gradio', 'gradio_client', 'matplotlib', 'tkinter', 'IPython', 'pytest'],
+    module_collection_mode={'librosa': 'py', 'transformers': 'py'},
     noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='FamilyVoiceCloner',

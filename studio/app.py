@@ -14,6 +14,7 @@ import uuid
 import logging
 import sqlite3
 import subprocess
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -467,7 +468,13 @@ def create_app(root=None):
                     app.state.model_operation = {'status': 'failed', 'message': str(exc)}
                     engine.message = str(exc)
                 finally:
-                    engine.lock.release()
+                    try:
+                        os.environ['HF_HUB_OFFLINE'] = '1'
+                        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+                        from huggingface_hub import constants as hub_constants
+                        hub_constants.HF_HUB_OFFLINE = True
+                    finally:
+                        engine.lock.release()
             threading.Thread(target=download, name='model-download', daemon=True).start()
         return {'status': 'downloading'}
 
@@ -479,5 +486,29 @@ def create_app(root=None):
                 engine.unload()
                 engine.message = 'Engine stopped. Recordings and models remain saved.'
         return engine.status()
+
+    @app.post('/api/engine/import/{name}')
+    def import_model(name: str, file: UploadFile = File(...)):
+        from .model_archive import import_archive
+        with mutation_lock:
+            idle()
+            with engine.lock, tempfile.TemporaryDirectory(prefix='family-model-upload-') as directory:
+                archive = Path(directory) / 'model.zip'
+                try:
+                    count = 0
+                    with archive.open('wb') as out:
+                        while chunk := file.file.read(4 * 1024 * 1024):
+                            count += len(chunk)
+                            if count > 8 * 1024**3:
+                                raise ValueError('Model ZIP exceeds the 8 GB limit.')
+                            out.write(chunk)
+                    engine.unload()
+                    result = import_archive(archive, engine.model_path(name), name)
+                    engine.message = 'Official model imported and verified. Load the engine to begin.'
+                    return result
+                except (json.JSONDecodeError, zipfile.BadZipFile, KeyError) as exc:
+                    raise ValueError('Invalid model archive.') from exc
+                finally:
+                    file.file.close()
 
     return app

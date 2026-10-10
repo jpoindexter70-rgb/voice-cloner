@@ -60,6 +60,8 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Test-Path installed-report.json)) { throw 'Installed runtime failed' }
           $p = Start-Process $exe -ArgumentList '--smoke-test', 'desktop-report.json' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Test-Path desktop-report.json)) { throw 'Native window test failed' }
+          $p = Start-Process $exe -ArgumentList '--model-test', 'neural-report.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Test-Path neural-report.json)) { throw 'Installed real model test failed' }
           New-Item -ItemType Directory -Force $env:VCR_DATA_DIR | Out-Null
           Set-Content "$env:VCR_DATA_DIR\preserve-me.txt" 'recordings must survive'
           $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru

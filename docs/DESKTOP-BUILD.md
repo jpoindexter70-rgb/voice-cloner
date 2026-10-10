@@ -12,6 +12,8 @@ The `Windows desktop installer` GitHub Actions workflow runs on Windows Server 2
 
 The corresponding source ZIP uses `git archive HEAD`, so it matches the workflow commit. Build-generated output and private data are excluded. SHA-256 sums are generated beside the installer.
 
+The installed executable's explicit developer-only `--model-test` command downloads missing official checkpoints, verifies integrity, loads Original and Turbo sequentially on CPU, synthesizes stock speech, uses that AI-generated output as a reference for genuine conditioned generation, and verifies WAV/MP3 encoding/decoding. The Windows workflow gates artifact upload on this test as well. That fixture does not measure a family speaker's similarity. Ordinary desktop startup does not automatically download models.
+
 To reproduce on a Windows development machine:
 
 ```text

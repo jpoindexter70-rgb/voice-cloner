@@ -109,6 +109,15 @@ class Engine:
             pass
 
     def load(self, name, preference):
+        os.environ['HF_HUB_OFFLINE'] = '1'
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+        # The Hub SDK reads this flag at import time; explicit downloads may have
+        # initialized it in online mode earlier in the same desktop process.
+        try:
+            from huggingface_hub import constants as hub_constants
+            hub_constants.HF_HUB_OFFLINE = True
+        except ImportError:
+            pass
         os.environ.setdefault('HF_HOME', str(self.root / '.cache'))
         os.environ.setdefault('NUMBA_CACHE_DIR', str(self.root / '.numba-cache'))
         missing = self.missing(name)

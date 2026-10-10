@@ -94,21 +94,73 @@ def self_test(destination):
     Path(destination).write_text(json.dumps(report, indent=2), encoding='utf-8')
 
 
+def model_test(destination):
+    """Explicit developer acceptance command using real models and AI-generated references."""
+    import numpy as np
+    import soundfile as sf
+    import torch
+    from .cli import download, verify, data_lock
+    from .engine import Engine, MODELS
+    from .app import GenerationIn
+    from . import audio
+    root = data_directory()
+    outputs = root / 'diagnostics' / ('neural-test-' + str(time.time_ns()))
+    outputs.mkdir(parents=True)
+    results = []
+    with data_lock(root):
+        for name in MODELS:
+            engine = Engine(root / 'models')
+            if engine.missing(name) or not (engine.model_path(name) / 'manifest.json').exists():
+                download(name)
+            verify(name)
+            start = time.monotonic()
+            with engine.lock:
+                engine.load(name, 'cpu')
+                torch.manual_seed(42)
+                with torch.inference_mode():
+                    stock = engine.model.generate('This is a local speech test. Family stories stay on this computer.')
+                samples = stock.detach().cpu().numpy().reshape(-1)
+                if not len(samples) or not np.isfinite(samples).all():
+                    raise RuntimeError('Model returned invalid stock speech.')
+                reference = np.tile(samples, max(1, int(np.ceil(9 * engine.model.sr / len(samples)))))
+                ref = outputs / (name + '-AI-generated-reference.wav')
+                sf.write(ref, reference, engine.model.sr)
+                controls = GenerationIn(text='Hello family. This speech is generated locally.')
+                wave, sr = engine.generate(controls.text, ref, {'engine': name, 'device': 'cpu'}, controls,
+                    lambda done, total: logging.info('%s synthesis: %s/%s', name, done, total), lambda: False)
+                if not np.isfinite(wave).all() or np.sqrt(np.mean(wave ** 2)) <= .001:
+                    raise RuntimeError('Synthesis output is invalid or silent.')
+                target = outputs / (name + '-reference-conditioned.wav')
+                sf.write(target, wave, sr)
+                mp3 = target.with_suffix('.mp3')
+                audio.export_mp3(target, mp3, synthetic=True)
+                decoded = outputs / (name + '-decoded.wav')
+                audio.decode(mp3, decoded)
+                results.append({'engine': name, 'device': engine.device, 'revision': engine.revision,
+                    'seconds': len(wave) / sr, 'elapsed_seconds': time.monotonic() - start,
+                    'real_neural_synthesis': True, 'reference_conditioning': True, 'wav_mp3_decode': True,
+                    'reference_provenance': 'AI-generated stock speech repeated for a nine-second reference',
+                    'family_similarity': 'unrun'})
+                engine.unload()
+    Path(destination).write_text(json.dumps({'models': results, 'outputs': str(outputs)}, indent=2), encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--self-test', metavar='REPORT')
     parser.add_argument('--smoke-test', metavar='REPORT')
+    parser.add_argument('--model-test', metavar='REPORT')
     args = parser.parse_args()
     root = data_directory()
     root.mkdir(parents=True, exist_ok=True)
     logs = setup_logging(root)
-    if args.self_test:
+    if args.self_test or args.model_test:
         try:
-            self_test(args.self_test)
+            (self_test if args.self_test else model_test)(args.self_test or args.model_test)
             return 0
         except Exception:
             logging.exception('Packaged self-test failed')
-            Path(args.self_test).write_text(json.dumps({'error': traceback.format_exc()}), encoding='utf-8')
+            Path(args.self_test or args.model_test).write_text(json.dumps({'error': traceback.format_exc()}), encoding='utf-8')
             return 1
 
     from PySide6.QtCore import QTimer, QUrl

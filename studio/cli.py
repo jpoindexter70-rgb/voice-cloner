@@ -57,10 +57,13 @@ def download(name, progress=None):
     os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
     os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
     from huggingface_hub import HfApi, hf_hub_download
+    from huggingface_hub import constants as hub_constants
+    hub_constants.HF_HUB_OFFLINE = False
     engine = Engine(data_directory() / 'models')
     directory = engine.model_path(name)
     directory.mkdir(parents=True, exist_ok=True)
-    info = HfApi().model_info(MODELS[name]['repo'], files_metadata=True)
+    revision = json.loads(Path(__file__).with_name('model-revisions.json').read_text())[name]['revision']
+    info = HfApi().model_info(MODELS[name]['repo'], revision=revision, files_metadata=True)
     wanted = set(MODELS[name]['files'])
     if name == 'turbo':
         wanted.update(x.rfilename for x in info.siblings if '/' not in x.rfilename and x.rfilename.endswith(('.json', '.txt', '.model')))
@@ -73,7 +76,12 @@ def download(name, progress=None):
         path = Path(hf_hub_download(info.id, item.rfilename, revision=info.sha, local_dir=directory))
         actual = digest(path)
         if item.lfs and item.lfs.sha256 and actual != item.lfs.sha256:
-            raise RuntimeError('Model checksum mismatch: ' + item.rfilename + '. File is not trusted; retry download.')
+            if progress:
+                progress('Integrity mismatch; downloading a fresh official copy of ' + item.rfilename)
+            path = Path(hf_hub_download(info.id, item.rfilename, revision=info.sha, local_dir=directory, force_download=True))
+            actual = digest(path)
+            if actual != item.lfs.sha256:
+                raise RuntimeError('Model checksum mismatch: ' + item.rfilename + '. File is not trusted; download stopped.')
         manifest['files'][item.rfilename] = {'sha256': actual, 'size': path.stat().st_size}
         print('Verified:', item.rfilename, flush=True)
         if progress:

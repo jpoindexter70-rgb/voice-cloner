@@ -2,7 +2,7 @@
 
 A local Python desktop voice studio built from the existing Voice Control Room project. The new desktop launcher embeds the interface in a native Qt window and manages its own loopback Python backend. Windows packaging bundles Python and dependencies; users do not need to install Python or start a separate server.
 
-**Build status:** desktop and installer source implemented; the Windows candidate pipeline is being validated. No completed installer release has been published yet. Read [desktop build and acceptance boundaries](docs/DESKTOP-BUILD.md) and [feature verification](docs/FEATURE-VERIFICATION.md) before calling this a final release.
+**Windows CPU preview:** [Download the verified installer and matching source ZIP](https://github.com/jpoindexter70-rgb/voice-cloner/releases/tag/desktop-preview-bb9e779d3fb0). The exact artifact passed installed runtime/native-window checks, genuine Original/Turbo neural generation, repair/reinstallation and uninstall preservation, plus a separate system-only PATH check. It is unsigned and does not certify the complete 46-feature specification or physical consumer hardware. See [verification](docs/FEATURE-VERIFICATION.md).
 
 ## Everyday workflow
 

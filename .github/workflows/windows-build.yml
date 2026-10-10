@@ -185,7 +185,8 @@ jobs:
           jq -e '.models | length == 2 and all(.real_neural_synthesis == true and .reference_conditioning == true and .wav_mp3_decode == true)' "$neural_report"
           installer=$(find candidate -name '*Setup.exe' -print -quit)
           source_zip=$(find candidate -name '*Source.zip' -print -quit)
-          test -n "$installer" && test -n "$source_zip"
+          test -n "$installer"
+          test -n "$source_zip"
           tag="desktop-preview-${revision:0:12}"
           cat > notes.md <<'NOTES'
           Python Windows desktop preview with bundled runtime, local Chatterbox Original/Turbo, family profiles, recording/editing, per-person controls, story/project workflows, timeline, persistent queue and WAV/MP3 export.

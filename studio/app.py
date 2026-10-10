@@ -472,6 +472,19 @@ def create_app(root=None):
                 'missing_recordings': [a['id'] for a in store.assets() if not store.path(a['id']).is_file()],
                 'microphone': 'Microphone permission and a live device test are available in Record Voice.'}
 
+    @app.get('/api/diagnostic-logs')
+    def diagnostic_logs():
+        records = []
+        for name in ('desktop.log', 'desktop.log.1', 'desktop.log.2'):
+            path = store.root / 'logs' / name
+            if not path.is_file() or not path.resolve().is_relative_to(store.root.resolve()):
+                continue
+            with path.open('rb') as source:
+                source.seek(max(0, path.stat().st_size - 65536))
+                content = source.read(65536).decode('utf-8', errors='replace')
+            records.append({'name': name, 'text': '\n'.join(content.splitlines()[-200:])})
+        return {'logs': records, 'notice': 'Local diagnostic logs; review personal details before sharing. No logs recorded yet.' if not records else 'Local diagnostic logs; review personal details before sharing.'}
+
     @app.post('/api/shutdown')
     def shutdown():
         with mutation_lock:

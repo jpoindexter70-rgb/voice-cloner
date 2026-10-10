@@ -95,6 +95,11 @@ with sync_playwright() as p:
     page.get_by_role('button',name='Settings and Diagnostics',exact=True).click()
     with page.expect_download() as download:page.get_by_role('link',name='Save verified backup ZIP').click()
     assert Path(download.value.path()).stat().st_size>1000
+    page.get_by_role('button',name='Local AI Engine Manager',exact=True).click()
+    page.get_by_role('button',name='Open diagnostic logs',exact=True).click()
+    page.get_by_text('Local diagnostic logs;',exact=False).wait_for()
+    page.get_by_role('button',name='Test voice generation',exact=True).click()
+    wait_js(page, "() => document.getElementById('notice').textContent.includes('not installed')")
     # Remove only this test profile; archive/project fixtures remain isolated in the test directory.
     page.get_by_role('button',name='Family Voice Library',exact=True).click()
     card=page.locator('article.card').filter(has=page.get_by_role('heading',name=name,exact=True))

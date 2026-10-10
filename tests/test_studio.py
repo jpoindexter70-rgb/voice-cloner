@@ -389,3 +389,16 @@ def test_profile_details_picture_validation_and_rename_preservation(client):
     assert client.delete(url).status_code == 200
     with client.app.state.store.connect() as connection:
         assert connection.execute('SELECT * FROM profile_details WHERE profile_id=?', (profile['id'],)).fetchone() is None
+
+
+def test_diagnostic_logs_are_bounded_and_only_known_local_files(client):
+    root = client.app.state.store.root
+    logs = root / 'logs'; logs.mkdir()
+    (logs / 'desktop.log').write_text('old line\n' * 10000 + 'Current startup failure\n')
+    (logs / 'private.txt').write_text('must not be served')
+    result = client.get('/api/diagnostic-logs').json()
+    assert len(result['logs']) == 1
+    assert result['logs'][0]['name'] == 'desktop.log'
+    assert result['logs'][0]['text'].endswith('Current startup failure')
+    assert len(result['logs'][0]['text'].splitlines()) <= 200
+    assert client.get('/api/diagnostic-logs?path=private.txt').json() == result

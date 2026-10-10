@@ -171,6 +171,7 @@ jobs:
             message="${message//%/%25}"
             message="${message//$'\n'/%0A}"
             echo "::error title=Publication diagnostics::$message"
+            exit 1
           }
           trap publication_failure ERR
           exec > >(tee /tmp/publish-output.log) 2>&1

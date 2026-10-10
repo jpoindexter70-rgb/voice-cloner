@@ -365,3 +365,27 @@ def test_missing_or_cross_speaker_saved_reference_reports_recovery_error(client)
         c.execute('UPDATE profiles SET primary_asset=? WHERE id=?', (other['id'], 'my-voice'))
     response = client.post('/api/generate', json={'text': 'Wrong reference.'})
     assert response.status_code == 400 and 'does not belong' in response.json()['detail']
+
+
+def test_profile_details_picture_validation_and_rename_preservation(client):
+    import base64
+    from PIL import Image
+    image = io.BytesIO()
+    Image.new('RGB', (400, 300), 'blue').save(image, format='PNG')
+    picture = 'data:image/png;base64,' + base64.b64encode(image.getvalue()).decode()
+    profile = client.post('/api/profiles', json={'name': 'Family picture', 'consent': True}).json()
+    url = '/api/profiles/' + profile['id']
+    result = client.patch(url, json={'name': 'Updated family', 'language': 'en', 'accent_notes': 'Scottish reference', 'picture': picture})
+    assert result.status_code == 200, result.text
+    details = result.json()['details']
+    with Image.open(io.BytesIO(base64.b64decode(details['picture'].split(',')[1]))) as resized:
+        assert resized.size == (256, 192)
+    assert details['accent_notes'] == 'Scottish reference'
+    assert client.patch(url, json={'name': 'Renamed again'}).json()['details'] == details
+    assert next(p for p in client.get('/api/profiles').json() if p['id'] == profile['id'])['details'] == details
+    assert client.patch(url, json={'name': 'Bad', 'picture': 'data:image/png;base64,bad!'}).status_code == 400
+    assert client.patch(url, json={'name': 'Bad', 'language': 'fr'}).status_code == 422
+    assert client.patch(url, json={'name': 'Removed', 'picture': ''}).json()['details']['picture'] == ''
+    assert client.delete(url).status_code == 200
+    with client.app.state.store.connect() as connection:
+        assert connection.execute('SELECT * FROM profile_details WHERE profile_id=?', (profile['id'],)).fetchone() is None

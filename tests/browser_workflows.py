@@ -34,9 +34,28 @@ with sync_playwright() as p:
     page.get_by_role('button',name='Create profile',exact=True).click()
     page.get_by_role('heading',name=name,exact=True).wait_for()
     card=page.locator('article.card').filter(has=page.get_by_role('heading',name=name,exact=True))
+    card.get_by_role('button',name='Edit profile',exact=True).click()
+    card.locator('.detail-accent').fill('Family reference accent')
+    import base64
+    photo=io.BytesIO(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='))
+    card.locator('.detail-picture').set_input_files({'name':'family.png','mimeType':'image/png','buffer':photo.getvalue()})
+    card.get_by_role('button',name='Save profile',exact=True).click()
+    wait_js(page, "() => document.getElementById('notice').textContent.includes('Profile details saved')")
+    page.reload()
+    page.get_by_role('button',name='Family Voice Library',exact=True).click()
+    card.get_by_role('button',name='Edit profile',exact=True).click()
+    assert card.locator('.detail-accent').input_value() == 'Family reference accent'
+    assert card.get_by_role('img').get_attribute('src').startswith('data:image/png;base64,')
+    page.get_by_role('button',name='Record Voice',exact=True).click()
+    first_script=page.locator('#guided-script-text').inner_text()
+    page.locator('#guided-script-next').click()
+    assert page.locator('#guided-script-text').inner_text() != first_script
+    page.locator('#guided-script').select_option('bedtime')
+    assert 'moon' in page.locator('#guided-script-text').inner_text()
+    page.get_by_role('button',name='Family Voice Library',exact=True).click()
     stream=io.BytesIO();sf.write(stream,.1*np.sin(np.arange(240000)*.05),24000,format='WAV')
-    card.locator('input[type=file]').set_input_files({'name':'workflow-tone.wav','mimeType':'audio/wav','buffer':stream.getvalue()})
-    card.locator('input[type=checkbox]').check();card.get_by_role('button',name='Upload reference',exact=True).click()
+    card.get_by_label('Add reference recording').set_input_files({'name':'workflow-tone.wav','mimeType':'audio/wav','buffer':stream.getvalue()})
+    card.get_by_label('I have authorization to store this speaker’s audio.').check();card.get_by_role('button',name='Upload reference',exact=True).click()
     card.get_by_text('workflow-tone.wav',exact=True).first.wait_for()
     page.get_by_role('button',name='Voice Adjustments',exact=True).click()
     page.locator('#controls-profile').select_option(label=name)
@@ -44,6 +63,12 @@ with sync_playwright() as p:
     page.locator('#voice-speed').fill('0.9');page.locator('#voice-volume').fill('0.8')
     page.get_by_role('button',name='Save voice settings',exact=True).click()
     wait_js(page, "() => document.getElementById('notice').textContent.includes('Voice settings saved')")
+    page.get_by_role('button',name='Reset defaults',exact=True).click()
+    wait_js(page, "() => document.getElementById('voice-speed').value === '1'")
+    page.reload()
+    page.get_by_role('button',name='Voice Adjustments',exact=True).click()
+    page.locator('#controls-profile').select_option(label=name)
+    wait_js(page, "() => document.getElementById('voice-volume').value === '1'")
     page.get_by_role('button',name='Pronunciation Editor',exact=True).click()
     page.locator('#pronunciation-profile').select_option(label=name)
     page.wait_for_timeout(250);page.locator('#pronunciation-rules').fill('Matthew = Math-yoo')
@@ -78,5 +103,6 @@ with sync_playwright() as p:
     assert not errors,errors
     print(json.dumps({'new_navigation':8,'profile_controls':True,'pronunciation':True,
         'story_voice_assignment':True,'timeline_edit':True,'timeline_wav_mp3_export':True,
-        'backup_download':True,'javascript_errors':errors,'real_synthesis':'unrun'},indent=2))
+        'backup_download':True,'profile_details_and_picture':True,'guided_scripts':True,
+        'reset_settings_persistence':True,'javascript_errors':errors,'real_synthesis':'unrun'},indent=2))
     browser.close()

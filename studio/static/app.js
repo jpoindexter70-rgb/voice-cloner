@@ -5,6 +5,16 @@ let recorder, stream, context, analyser, animation, timerHandle, startedAt, paus
 let recordedBlob, recordedUrl, chunks = [], recordingMime;
 const titles = {dashboard:'Dashboard',myvoice:'My Voice',recorder:'Voice Recorder',generate:'Generate Speech',library:'Voice Library',editor:'Audio Editor',settings:'Settings',engine:'Engine Status'};
 const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const guidedScripts = {
+  natural: ['This is my natural speaking voice. I am recording in a quiet room, at a comfortable pace. Today I am testing how faithfully my voice can be reproduced. Every voice has its own rhythm, and this is mine.', 'Use your everyday voice. Record 10–30 seconds without music or another person speaking.'],
+  story: ['On a bright Saturday morning, our family set off on a little adventure. We followed the winding path past the old oak tree. What would we discover next? A bird sang overhead, and everyone stopped to listen.', 'Use a comfortable storytelling voice. Keep the same distance from the microphone throughout.'],
+  clear: ['Please meet me at the library on Thursday at half past three. We need seven apples, two notebooks, and a blue umbrella. My name is important to me, so I say it clearly. The journey is twelve miles long.', 'Speak clearly at your normal pace. Add family names you want the model to learn from your sample.'],
+  bedtime: ['The house grew quiet as the evening settled in. Outside, the moon shone softly through the trees. A little fox curled up in its warm den, closed its eyes, and dreamed of a peaceful morning.', 'Speak gently with a clear, audible voice. Avoid whispering; a clean normal-voice reference is more reliable.']
+};
+function displayGuidedScript(){const script=guidedScripts[$('guided-script').value];$('guided-script-text').textContent=script[0];$('guided-script-tip').textContent=script[1];}
+$('guided-script').addEventListener('change',displayGuidedScript);
+$('guided-script-next').addEventListener('click',()=>{const select=$('guided-script');select.selectedIndex=(select.selectedIndex+1)%select.options.length;displayGuidedScript();});
+displayGuidedScript();
 function notify(message, error = false) { $('notice').textContent = message; $('notice').className = error ? 'error' : ''; $('notice').hidden = false; }
 async function api(path, options = {}) {
   const headers = {'X-VCR-Token':token, ...options.headers};
@@ -76,11 +86,16 @@ function renderProfiles() {
   profiles.forEach(profile=>{
     const card=document.createElement('article'); card.className='card';
     card.innerHTML=`<div class="card-title"><h2>${escapeText(profile.name)}</h2><span class="badge">${profile.id==='my-voice'?'DEFAULT':profile.kind.toUpperCase()}</span></div><p class="footnote">${escapeText(profile.authorization)} · Created ${escapeText(new Date(profile.created).toLocaleDateString())}</p><div class="actions"></div><div class="profile-assets"></div>`;
+    if(profile.details?.picture){const img=document.createElement('img');img.src=profile.details.picture;img.alt=profile.name+' profile picture';img.width=72;img.height=72;card.querySelector('.card-title').prepend(img);}
     const actions=card.querySelector('.actions');
     const addButton=(label,action,danger=false)=>{const b=document.createElement('button');b.textContent=label;b.className=danger?'danger':'secondary';b.addEventListener('click',protect(action));actions.append(b);};
     addButton('Test voice',()=>{$('generate-profile').value=profile.id;show('generate');});
     addButton('Record',()=>{$('record-profile').value=profile.id;show('recorder');});
     addButton('Rename',async()=>{const name=prompt('New profile name',profile.name);if(name?.trim()){await api(`/profiles/${profile.id}`,{method:'PATCH',body:{name:name.trim()}});await refresh();}});
+    const edit=document.createElement('form');edit.hidden=true;
+    edit.innerHTML=`<h3>Edit profile</h3><div class="form-grid"><label>Name<input class="detail-name" maxlength="80" required value="${escapeText(profile.name)}"></label><label>Preferred language<select class="detail-language"><option value="en">English</option></select></label><label>Reference accent notes<input class="detail-accent" maxlength="200" value="${escapeText(profile.details?.accent_notes||'')}"></label><label>Profile picture<input class="detail-picture" type="file" accept="image/png"></label></div><label class="checkbox"><input class="detail-remove-picture" type="checkbox">Remove profile picture</label><p class="footnote">These models support English. Accent comes from the speaker’s reference; notes organize samples and do not change synthesis. Pictures remain on this computer.</p><button class="secondary">Save profile</button>`;
+    addButton('Edit profile',()=>{edit.hidden=!edit.hidden;});
+    edit.addEventListener('submit',protect(async event=>{event.preventDefault();let picture=profile.details?.picture||'';const file=edit.querySelector('.detail-picture').files[0];if(file){if(file.size>280000)throw new Error('Use a PNG picture smaller than 280 KB.');picture=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Unable to read the picture.'));reader.readAsDataURL(file);});}if(edit.querySelector('.detail-remove-picture').checked)picture='';await api(`/profiles/${profile.id}`,{method:'PATCH',body:{name:edit.querySelector('.detail-name').value,language:'en',accent_notes:edit.querySelector('.detail-accent').value,picture}});await refresh();notify('Profile details saved locally.');}));card.append(edit);
     addButton(profile.id==='my-voice'?'Clear My Voice data':'Delete profile',async()=>{if(await confirmDelete(`Delete all active recordings, generated clips, and evaluations for ${profile.name}? ${profile.id==='my-voice'?'The empty default profile remains.':''} Exports and backups are separate.`)){await api(`/profiles/${profile.id}`,{method:'DELETE'});await refresh();notify('Profile data deleted.');}},true);
     const form=document.createElement('form');
     form.innerHTML='<label>Add reference recording<input type="file" accept="audio/*" required></label><label class="checkbox"><input type="checkbox" required> I have authorization to store this speaker’s audio.</label><button class="secondary">Upload reference</button>';
@@ -155,6 +170,7 @@ $('record-start').addEventListener('click',protect(async()=>{
     stream=await getMicrophone();await listMicrophones();recordingProfile=$('record-profile').value;chunks=[];recordedBlob=null;$('record-save').disabled=true;$('record-preview').hidden=true;
     recordingMime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4'].find(type=>MediaRecorder.isTypeSupported(type));
     recorder=new MediaRecorder(stream,recordingMime?{mimeType:recordingMime}:{});
+    stream.getAudioTracks().forEach(track=>track.addEventListener('ended',()=>{notify('The microphone disconnected. Review and save the audio captured so far, then reconnect or choose another microphone.',true);if(recorder && recorder.state!=='inactive')recorder.stop();}));
     recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
     recorder.onerror=event=>{notify(event.error?.message || 'Microphone recording failed.',true);if(recorder.state!=='inactive')recorder.stop();};
     recorder.onstop=async()=>{

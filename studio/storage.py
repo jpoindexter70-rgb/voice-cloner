@@ -84,6 +84,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS reviews (
                 id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS profile_details (
+                profile_id TEXT PRIMARY KEY, data TEXT NOT NULL);
             ''')
             c.execute('INSERT OR IGNORE INTO profiles (id,name,kind,authorization,created,primary_asset) VALUES (?,?,?,?,?,NULL)',
                       ('my-voice', 'My Voice', 'self', 'Own voice', now()))
@@ -98,14 +100,24 @@ class Store:
 
     def profiles(self):
         with self.connect() as c:
-            return [dict(x) for x in c.execute('SELECT * FROM profiles ORDER BY id != ?, created', ('my-voice',))]
+            rows = [dict(x) for x in c.execute('SELECT * FROM profiles ORDER BY id != ?, created', ('my-voice',))]
+            details = {x['profile_id']: json.loads(x['data']) for x in c.execute('SELECT * FROM profile_details')}
+        return [dict(x, details=details.get(x['id'], {})) for x in rows]
 
     def profile(self, ident):
         with self.connect() as c:
             row = c.execute('SELECT * FROM profiles WHERE id=?', (ident,)).fetchone()
         if not row:
             raise ValueError('Voice profile not found.')
-        return dict(row)
+        with self.connect() as c:
+            details = c.execute('SELECT data FROM profile_details WHERE profile_id=?', (ident,)).fetchone()
+        return dict(row, details=json.loads(details['data']) if details else {})
+
+    def save_profile_details(self, ident, details):
+        self.profile(ident)
+        with self.connect() as c:
+            c.execute('INSERT INTO profile_details VALUES (?,?) ON CONFLICT(profile_id) DO UPDATE SET data=excluded.data',
+                      (ident, json.dumps(details)))
 
     def create_profile(self, name, kind, authorization):
         ident = uuid.uuid4().hex
@@ -172,6 +184,7 @@ class Store:
         with self.connect() as c:
             if ident != 'my-voice':
                 c.execute('DELETE FROM profiles WHERE id=?', (ident,))
+                c.execute('DELETE FROM profile_details WHERE profile_id=?', (ident,))
 
     def settings(self):
         defaults = {'engine': 'chatterbox', 'device': 'auto'}

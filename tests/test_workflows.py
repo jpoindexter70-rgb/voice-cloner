@@ -188,3 +188,21 @@ def test_backup_retry_uses_distinct_names_when_windows_clock_repeats(tmp_path,mo
     first=backup_existing.backup(source,tmp_path/'backups')
     second=backup_existing.backup(source,tmp_path/'backups')
     assert first!=second and first.is_file() and second.is_file()
+
+
+def test_application_shutdown_stops_queue_worker_and_reopen_preserves_audio(tmp_path, monkeypatch):
+    root = tmp_path / 'restart'
+    for index in range(3):
+        app = create_app(root)
+        monkeypatch.setattr(app.state.engine, 'missing', lambda name: [])
+        monkeypatch.setattr(app.state.engine, 'generate', lambda *args: (np.ones(24000)*.1, 24000))
+        with TestClient(app) as client:
+            client.get('/')
+            client.headers['X-VCR-Token'] = client.get('/api/session').json()['token']
+            if index == 0:
+                upload(client)
+            job = client.post('/api/queue', json={'text': 'Restart reliability fixture.'}).json()
+            assert wait_job(client, job['id'])['status'] == 'complete'
+        assert app.state.queue.stop_event.is_set()
+        assert not app.state.queue.thread.is_alive()
+        assert len(app.state.store.assets()) == index + 2

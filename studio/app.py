@@ -15,6 +15,7 @@ import logging
 import sqlite3
 import subprocess
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +42,9 @@ class ProfileIn(BaseModel):
 
 class RenameIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+    language: Literal['en'] = 'en'
+    accent_notes: str = Field(default='', max_length=200)
+    picture: str = Field(default='', max_length=400000)
 
 
 class SettingsIn(BaseModel):
@@ -97,7 +101,20 @@ def memory_status():
 
 
 def create_app(root=None):
-    app = FastAPI(title='Voice Control Room Advanced', docs_url=None, redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            queue = app.state.queue
+            queue.stop_event.set()
+            queue.wake.set()
+            if queue.thread:
+                queue.thread.join(timeout=15)
+            if not queue.thread or not queue.thread.is_alive():
+                with app.state.engine.lock:
+                    app.state.engine.unload()
+    app = FastAPI(title='Voice Control Room Advanced', docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', '[::1]', 'testserver'])
     store = Store(root or data_directory())
     engine = Engine(store.root / 'models')
@@ -180,7 +197,31 @@ def create_app(root=None):
     def rename(ident: str, body: RenameIn):
         if not body.name.strip():
             raise ValueError('Enter a profile name.')
+        details = store.profile(ident)['details']
+        picture = body.picture if 'picture' in body.model_fields_set else details.get('picture', '')
+        if picture:
+            import base64
+            import io
+            from PIL import Image
+            if not picture.startswith('data:image/png;base64,'):
+                raise ValueError('Use a PNG profile picture.')
+            try:
+                raw = base64.b64decode(picture.split(',', 1)[1], validate=True)
+                with Image.open(io.BytesIO(raw)) as image:
+                    if image.format != 'PNG' or max(image.size) > 1024:
+                        raise ValueError('Choose a picture no larger than 1024 pixels.')
+                    image.load()
+                    image = image.convert('RGB')
+                    image.thumbnail((256, 256))
+                    output = io.BytesIO()
+                    image.save(output, format='PNG')
+                picture = 'data:image/png;base64,' + base64.b64encode(output.getvalue()).decode('ascii')
+            except Exception as exc:
+                raise ValueError('The profile picture could not be decoded. Use a valid PNG up to 1024 pixels.') from exc
         store.rename(ident, body.name.strip())
+        store.save_profile_details(ident, {'language': body.language if 'language' in body.model_fields_set else details.get('language', 'en'),
+                                         'accent_notes': body.accent_notes.strip() if 'accent_notes' in body.model_fields_set else details.get('accent_notes', ''),
+                                         'picture': picture})
         return store.profile(ident)
 
     def idle():

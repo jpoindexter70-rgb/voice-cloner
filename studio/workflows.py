@@ -438,7 +438,8 @@ class PersistentQueue:
         except Exception as exc:
             if not self.store.path(ident).is_file() or not any(a['id'] == ident for a in self.store.assets()):
                 target.unlink(missing_ok=True)
-            item.update(status='cancelled' if self.get(item['id'])['cancel'] else 'failed', error=str(exc))
+            status = 'cancelled' if self.get(item['id'])['cancel'] else ('interrupted' if self.stop_event.is_set() else 'failed')
+            item.update(status=status, error=str(exc))
         self.save(item)
 
 

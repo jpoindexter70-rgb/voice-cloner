@@ -142,7 +142,10 @@ def model_test(destination):
                     'reference_provenance': 'AI-generated stock speech repeated for a nine-second reference',
                     'family_similarity': 'unrun'})
                 engine.unload()
-    Path(destination).write_text(json.dumps({'models': results, 'outputs': str(outputs)}, indent=2), encoding='utf-8')
+    from .acceptance import story_acceptance
+    story = story_acceptance(outputs / 'story-workflow', root / 'models',
+                             [outputs / (name + '-AI-generated-reference.wav') for name in MODELS])
+    Path(destination).write_text(json.dumps({'models': results, 'story': story, 'outputs': str(outputs)}, indent=2), encoding='utf-8')
 
 
 def main():

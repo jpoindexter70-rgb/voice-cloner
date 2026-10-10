@@ -36,7 +36,11 @@ with sync_playwright() as p:
     page.locator('#record-profile').select_option(label=speaker)
     page.locator('#microphone-enable').click()
     wait_js(page, "() => document.querySelectorAll('#microphone option').length > 1")
-    page.locator('#record-countdown').select_option('3')
+    page.locator('#record-countdown').select_option('5')
+    page.locator('#record-start').click()
+    page.get_by_role('button',name='Cancel countdown',exact=True).click()
+    assert page.locator('#record-state').inner_text() == 'READY TO RECORD'
+    assert page.locator('#record-start').is_enabled()
     page.locator('#record-start').click()
     assert page.locator('#record-state').inner_text().startswith('STARTING IN')
     wait_js(page, "() => document.getElementById('record-state').textContent === 'RECORDING'")
@@ -96,5 +100,5 @@ with sync_playwright() as p:
     page.locator('#confirm-yes').click()
     page.get_by_role('heading',name=speaker,exact=True).wait_for(state='detached')
     assert not errors,errors
-    print(json.dumps({'browser':'system Chromium on Linux','navigation':8,'fake_microphone_record_pause_resume_save':True,'three_second_countdown':True,'live_level_response':True,'playback':True,'editing':True,'wav_mp3_downloads':True,'profile_create_delete':True,'missing_model_error':True,'unsupported_turbo_controls_disabled':True,'javascript_errors':errors},indent=2))
+    print(json.dumps({'browser':'system Chromium on Linux','navigation':8,'fake_microphone_record_pause_resume_save':True,'five_second_countdown':True,'live_level_response':True,'playback':True,'editing':True,'wav_mp3_downloads':True,'profile_create_delete':True,'missing_model_error':True,'unsupported_turbo_controls_disabled':True,'javascript_errors':errors},indent=2))
     browser.close()

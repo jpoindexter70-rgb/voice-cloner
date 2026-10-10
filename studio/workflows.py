@@ -407,7 +407,8 @@ class PersistentQueue:
                 waves.append(wave)
                 if index < len(item['parts']) - 1:
                     # Emphasis splits are phrase boundaries, not sentence pauses.
-                    pause = 0 if index in item.get('emphasis', []) or index + 1 in item.get('emphasis', []) else control.pause_ms
+                    phrase_boundary = index in item.get('emphasis', []) or index + 1 in item.get('emphasis', [])
+                    pause = 0 if phrase_boundary and not text.endswith(('.', '!', '?')) else control.pause_ms
                     waves.append(np.zeros(round(sr * pause / 1000), dtype=np.float32))
                 item['completed'] = index + 1
                 item['cancel'] = self.get(item['id'])['cancel']

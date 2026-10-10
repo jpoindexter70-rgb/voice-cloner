@@ -11,6 +11,9 @@ import shutil
 import tempfile
 import threading
 import uuid
+import logging
+import sqlite3
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -132,6 +135,13 @@ def create_app(root=None):
     @app.exception_handler(RuntimeError)
     async def runtime(request, exc):
         return JSONResponse({'detail': str(exc)}, status_code=503)
+
+    async def system_error(request, exc):
+        logging.exception('Local operation failed: %s', request.url.path, exc_info=exc)
+        return JSONResponse({'detail': type(exc).__name__ + ': ' + str(exc)
+            + '. Your existing recordings were preserved. Check local diagnostics and logs.'}, status_code=500)
+    for error_type in (OSError, sqlite3.Error, subprocess.TimeoutExpired):
+        app.add_exception_handler(error_type, system_error)
 
     static = Path(__file__).parent / 'static'
     app.mount('/static', StaticFiles(directory=static), name='static')

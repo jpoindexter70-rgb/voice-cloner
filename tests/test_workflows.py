@@ -160,3 +160,31 @@ def test_extreme_pitch_speed_combinations_use_supported_ffmpeg_tempo(tmp_path,sp
     sf.write(source,np.sin(np.arange(240000)*.05)*.1,24000)
     result=edit(source,target,0,None,False,False,speed,pitch)
     assert abs(result['seconds']-10/speed)<.25
+
+
+def test_phrase_emphasis_uses_real_audio_gain_and_sentence_pauses(client,monkeypatch):
+    upload(client)
+    e=client.app.state.engine;monkeypatch.setattr(e,'missing',lambda name:[])
+    def generate(text,*args):return np.ones(24000)*.1,24000
+    monkeypatch.setattr(e,'generate',generate)
+    job=client.post('/api/queue',json={'text':'Hello [emphasis]family[/emphasis]. Another sentence.','controls':{'pause_ms':500}}).json()
+    assert job['parts']==['Hello','family.','Another sentence.'] and job['emphasis']==[1]
+    done=wait_job(client,job['id']);assert done['status']=='complete'
+    x,sr=sf.read(client.app.state.store.path(done['asset']['id']))
+    assert .124<np.max(x[sr:2*sr])<.126
+    assert len(x)==round(3.5*sr) and np.max(np.abs(x[2*sr:round(2.5*sr)]))==0
+    assert '[emphasis]' not in done['asset']['metadata']['text']
+    assert client.post('/api/queue',json={'text':'[emphasis]Unclosed'}).status_code==400
+
+
+def test_backup_retry_uses_distinct_names_when_windows_clock_repeats(tmp_path,monkeypatch):
+    from scripts import backup_existing
+    class SameTime:
+        @staticmethod
+        def now():return SameTime()
+        def strftime(self,pattern):return '20261010-120000-000000'
+    monkeypatch.setattr(backup_existing,'datetime',SameTime)
+    source=tmp_path/'source';source.mkdir();(source/'recording.wav').write_bytes(b'preserve')
+    first=backup_existing.backup(source,tmp_path/'backups')
+    second=backup_existing.backup(source,tmp_path/'backups')
+    assert first!=second and first.is_file() and second.is_file()

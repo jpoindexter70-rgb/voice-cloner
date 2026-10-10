@@ -187,6 +187,9 @@ def main():
                 'Cancel generation or wait for the current model operation before closing. Your work is saved locally.')
             event.ignore(); return
         closing = True
+        if backend.app:
+            backend.app.state.queue.stop_event.set()
+            backend.app.state.queue.wake.set()
         backend.stop()
         event.accept()
     window.closeEvent = close_event

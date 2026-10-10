@@ -10,8 +10,19 @@ from pathlib import Path
 
 MODELS = {
     'chatterbox': {'repo': 'ResembleAI/chatterbox', 'files': ['ve.safetensors', 't3_cfg.safetensors', 's3gen.safetensors', 'tokenizer.json', 'conds.pt']},
-    'turbo': {'repo': 'ResembleAI/chatterbox-turbo', 'files': ['ve.safetensors', 't3_turbo_v1.safetensors', 's3gen_meanflow.safetensors', 'tokenizer.json', 'tokenizer_config.json', 'conds.pt']},
+    'turbo': {'repo': 'ResembleAI/chatterbox-turbo', 'files': ['ve.safetensors', 't3_turbo_v1.safetensors', 's3gen_meanflow.safetensors', 'vocab.json', 'merges.txt', 'tokenizer_config.json', 'conds.pt']},
 }
+
+
+def cpu_threads():
+    available = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 4)
+    try:
+        quota, period = Path('/sys/fs/cgroup/cpu.max').read_text().split()
+        if quota != 'max':
+            available = min(available, max(1, int(quota) // int(period)))
+    except (OSError, ValueError):
+        pass
+    return max(1, min(8, available))
 
 
 def verify_manifest(directory, name):
@@ -119,7 +130,7 @@ class Engine:
             return
         verify_manifest(self.model_path(name), name)
         self.unload()
-        torch.set_num_threads(min(8, os.cpu_count() or 4))
+        torch.set_num_threads(cpu_threads())
         cls = ChatterboxTTS if name == 'chatterbox' else ChatterboxTurboTTS
         self.message = f'Loading {name} on {selected}…'
         try:

@@ -120,11 +120,14 @@ try {
     Run-Python -Arguments @('-m','pip','install','-r','requirements-engine.txt')
     Run-Python -Arguments @('-m','pip','check')
     Run-Python -Arguments @('-m','studio.cli','doctor')
+    Run-Python -Arguments @('-m','studio.cli','check-runtime')
     $Relative = $EnvName + '\Scripts\python.exe'
     [System.IO.File]::WriteAllText((Join-Path $Target 'python-path.txt'), $Relative, [System.Text.Encoding]::ASCII)
     Write-Host '[8/8] Packages installed. Downloading and verifying both voice models (several GB)...'
     Run-Python -Arguments @('-m','studio.cli','download-models','--engine','all')
     Run-Python -Arguments @('-m','studio.cli','verify-models','--engine','all')
+    Write-Host 'Verifying that both downloaded engines actually load. This may take several minutes...'
+    Run-Python -Arguments @('-m','studio.cli','check-runtime','--load-models')
     # Use a unique shortcut; do not replace an existing user shortcut.
     $Desktop = [Environment]::GetFolderPath('Desktop')
     $ShortcutPath = Join-Path $Desktop ('Voice Control Room Advanced ' + (Get-Date -Format 'yyyyMMdd-HHmmss-ffff') + '.lnk')

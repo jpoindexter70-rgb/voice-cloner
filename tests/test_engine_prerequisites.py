@@ -18,3 +18,27 @@ def test_real_engine_imports_and_packaged_watermarker():
     with torch.inference_mode():
         output=model.apply_watermark(samples,sample_rate=24000)
     assert len(output)>45000 and np.isfinite(output).all()
+
+
+def test_installer_runtime_checks_load_each_model_and_unload(tmp_path, monkeypatch):
+    from studio import cli
+    from studio.engine import Engine
+    monkeypatch.setenv('VCR_DATA_DIR', str(tmp_path))
+    loaded, unloaded = [], []
+    def load(self, name, device):
+        assert self.lock.locked()
+        loaded.append((name, device))
+        self.message = name + ' fixture loaded'
+    monkeypatch.setattr(Engine, 'load', load)
+    monkeypatch.setattr(Engine, 'unload', lambda self: unloaded.append(True))
+    cli.check_runtime(load_models=True)
+    assert loaded == [('chatterbox', 'auto'), ('turbo', 'auto')]
+    assert len(unloaded) == 2
+
+
+def test_installer_model_load_failure_is_not_reported_as_success(tmp_path, monkeypatch):
+    import pytest
+    from studio import cli
+    monkeypatch.setenv('VCR_DATA_DIR', str(tmp_path))
+    with pytest.raises(RuntimeError, match='model files missing'):
+        cli.check_runtime(load_models=True)

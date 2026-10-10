@@ -91,6 +91,32 @@ def verify(name):
     print('Model integrity verified:', name)
 
 
+def check_runtime(load_models=False):
+    os.environ['HF_HUB_OFFLINE'] = '1'
+    os.environ['TRANSFORMERS_OFFLINE'] = '1'
+    os.environ.setdefault('HF_HOME', str(data_directory() / 'models' / '.cache'))
+    os.environ.setdefault('NUMBA_CACHE_DIR', str(data_directory() / 'models' / '.numba-cache'))
+    import torch
+    import torchaudio
+    import perth
+    from chatterbox.tts import ChatterboxTTS
+    from chatterbox.tts_turbo import ChatterboxTurboTTS
+    if perth.PerthImplicitWatermarker is None:
+        raise RuntimeError('The voice watermark runtime is unavailable. Repair the pinned engine packages.')
+    # Initialize the actual packaged runtime, rather than checking package names.
+    perth.PerthImplicitWatermarker()
+    print('Both voice engine imports and watermark initialization passed.', flush=True)
+    if load_models:
+        store = Store(data_directory())
+        engine = Engine(store.root / 'models')
+        for name in MODELS:
+            with engine.lock:
+                engine.load(name, store.settings()['device'])
+                print(engine.message, flush=True)
+                engine.unload()
+        print('Both models loaded successfully. Personal voice generation still requires a saved reference.', flush=True)
+
+
 def backup(source=None, destination=None):
     source = Path(source or data_directory()).resolve()
     if not source.is_dir():
@@ -206,6 +232,8 @@ def main():
     back.add_argument('--source')
     back.add_argument('--destination')
     commands.add_parser('doctor')
+    runtime = commands.add_parser('check-runtime')
+    runtime.add_argument('--load-models', action='store_true')
     args = parser.parse_args()
     try:
         if args.command == 'serve':
@@ -217,6 +245,9 @@ def main():
         elif args.command == 'backup':
             with data_lock():
                 backup(args.source, args.destination)
+        elif args.command == 'check-runtime':
+            with data_lock():
+                check_runtime(args.load_models)
         else:
             from .app import create_app
             app = create_app()

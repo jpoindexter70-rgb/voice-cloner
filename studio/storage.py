@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import uuid
+import warnings
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -19,12 +20,48 @@ def data_directory():
 
 
 class Store:
+    COLUMNS = {
+        'profiles': {'id', 'name', 'kind', 'authorization', 'created', 'primary_asset'},
+        'assets': {'id', 'profile_id', 'name', 'kind', 'created', 'metadata'},
+        'settings': {'key', 'value'},
+        'reviews': {'id', 'asset_id', 'data', 'created'},
+    }
+
+    @classmethod
+    def compatible(cls, path):
+        if not path.exists():
+            return True
+        # Inspect without changing an unfamiliar database, including its journal.
+        with sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True) as c:
+            for table, required in cls.COLUMNS.items():
+                columns = c.execute(f'PRAGMA table_info({table})').fetchall()
+                if not columns:
+                    continue
+                names = {column[1] for column in columns}
+                if not required <= names:
+                    return False
+                key = 'key' if table == 'settings' else 'id'
+                if [column[1] for column in columns if column[5]] != [key]:
+                    return False
+                if any(column[1] not in required and column[3] and column[4] is None
+                       for column in columns):
+                    return False
+        return True
+
     def __init__(self, root):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.audio = self.root / 'audio'
         self.audio.mkdir(exist_ok=True, mode=0o700)
         self.db = self.root / 'studio.sqlite3'
+        self.preserved_database = None
+        dedicated = self.root / 'studio-v1.sqlite3'
+        if dedicated.exists() or not self.compatible(self.db):
+            self.preserved_database = self.db if self.db.exists() else None
+            self.db = dedicated
+            if not self.compatible(self.db):
+                raise RuntimeError('The dedicated studio database has an incompatible layout. Both databases were preserved; restore a verified backup or inspect their schemas before repair.')
+            warnings.warn('An earlier database is preserved separately. This studio uses studio-v1.sqlite3; recordings from the earlier app require explicit import.', RuntimeWarning)
         with self.connect() as c:
             c.executescript('''
             CREATE TABLE IF NOT EXISTS profiles (
@@ -38,7 +75,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS reviews (
                 id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
             ''')
-            c.execute('INSERT OR IGNORE INTO profiles VALUES (?,?,?,?,?,NULL)',
+            c.execute('INSERT OR IGNORE INTO profiles (id,name,kind,authorization,created,primary_asset) VALUES (?,?,?,?,?,NULL)',
                       ('my-voice', 'My Voice', 'self', 'Own voice', now()))
         if os.name != 'nt':
             self.root.chmod(0o700)
@@ -63,7 +100,7 @@ class Store:
     def create_profile(self, name, kind, authorization):
         ident = uuid.uuid4().hex
         with self.connect() as c:
-            c.execute('INSERT INTO profiles VALUES (?,?,?,?,?,NULL)',
+            c.execute('INSERT INTO profiles (id,name,kind,authorization,created,primary_asset) VALUES (?,?,?,?,?,NULL)',
                       (ident, name, kind, authorization, now()))
         return self.profile(ident)
 
@@ -97,7 +134,7 @@ class Store:
     def add_asset(self, ident, profile_id, name, kind, metadata):
         self.profile(profile_id)
         with self.connect() as c:
-            c.execute('INSERT INTO assets VALUES (?,?,?,?,?,?)',
+            c.execute('INSERT INTO assets (id,profile_id,name,kind,created,metadata) VALUES (?,?,?,?,?,?)',
                       (ident, profile_id, name, kind, now(), json.dumps(metadata)))
             if kind == 'reference':
                 c.execute('UPDATE profiles SET primary_asset=? WHERE id=? AND primary_asset IS NULL', (ident, profile_id))
@@ -135,14 +172,14 @@ class Store:
     def save_settings(self, settings):
         with self.connect() as c:
             for key, val in settings.items():
-                c.execute('INSERT OR REPLACE INTO settings VALUES (?,?)', (key, json.dumps(val)))
+                c.execute('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, json.dumps(val)))
 
     def review(self, ident, data):
         asset = self.asset(ident)
         if asset['kind'] != 'generated':
             raise ValueError('Only generated clips can be evaluated.')
         with self.connect() as c:
-            c.execute('INSERT INTO reviews VALUES (?,?,?,?)', (uuid.uuid4().hex, ident, json.dumps(data), now()))
+            c.execute('INSERT INTO reviews (id,asset_id,data,created) VALUES (?,?,?,?)', (uuid.uuid4().hex, ident, json.dumps(data), now()))
 
     def reviews(self):
         with self.connect() as c:

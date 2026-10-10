@@ -293,3 +293,75 @@ def test_bundled_ffmpeg_fallback(tmp_path,monkeypatch):
     assert target.stat().st_size>1000
     metadata=audio.decode(target,tmp_path/'decoded.wav')
     assert 1.9<metadata['seconds']<2.2
+
+
+def wait_job(client, ident):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        result = client.get(f'/api/jobs/{ident}').json()
+        if result['status'] not in ('queued', 'running'):
+            return result
+        time.sleep(.01)
+    raise AssertionError('Job did not finish')
+
+
+def test_failed_generation_preserves_reference_and_allows_retry(client, monkeypatch):
+    reference = upload(client)
+    engine = client.app.state.engine
+    monkeypatch.setattr(engine, 'missing', lambda name: [])
+    before = client.app.state.store.path(reference['id']).read_bytes()
+    def fail(*args):
+        raise RuntimeError('Deliberate inference failure fixture')
+    monkeypatch.setattr(engine, 'generate', fail)
+    ident = client.post('/api/generate', json={'text': 'Failure test.'}).json()['id']
+    job = wait_job(client, ident)
+    assert job['status'] == 'failed' and 'inference failure' in job['error']
+    assert len(client.get('/api/assets').json()) == 1
+    assert len(list(client.app.state.store.audio.glob('*.wav'))) == 1
+    assert client.app.state.store.path(reference['id']).read_bytes() == before
+    monkeypatch.setattr(engine, 'generate', lambda *args: (np.ones(24000) * .1, 24000))
+    ident = client.post('/api/generate', json={'text': 'Retry test.'}).json()['id']
+    assert wait_job(client, ident)['status'] == 'complete'
+
+
+def test_cancellation_and_concurrent_generation_do_not_save_partial_output(client, monkeypatch):
+    import threading
+    reference = upload(client)
+    engine = client.app.state.engine
+    monkeypatch.setattr(engine, 'missing', lambda name: [])
+    entered, release = threading.Event(), threading.Event()
+    def generate(text, reference, settings, controls, progress, cancelled):
+        entered.set()
+        assert release.wait(5)
+        if cancelled():
+            raise RuntimeError('Generation cancelled. No recording was saved.')
+        return np.ones(24000) * .1, 24000
+    monkeypatch.setattr(engine, 'generate', generate)
+    ident = client.post('/api/generate', json={'text': 'Cancellation test.'}).json()['id']
+    try:
+        assert entered.wait(5)
+        assert client.post('/api/generate', json={'text': 'Concurrent test.'}).status_code == 409
+        assert client.post('/api/shutdown').status_code == 409
+        assert client.post('/api/engine/load').status_code == 409
+        assert client.post(f'/api/jobs/{ident}/cancel').status_code == 200
+    finally:
+        release.set()
+    assert wait_job(client, ident)['status'] == 'cancelled'
+    assert client.get('/api/assets').json()[0]['id'] == reference['id']
+    assert len(list(client.app.state.store.audio.glob('*.wav'))) == 1
+    assert client.post('/api/jobs/unknown/cancel').status_code == 404
+    assert client.get('/api/jobs/unknown').status_code == 404
+
+
+def test_missing_or_cross_speaker_saved_reference_reports_recovery_error(client):
+    reference = upload(client)
+    client.app.state.store.path(reference['id']).unlink()
+    assert client.get(f'/api/assets/{reference["id"]}/audio').status_code == 400
+    response = client.post('/api/generate', json={'text': 'Missing reference.'})
+    assert response.status_code == 400 and 'missing' in response.json()['detail']
+    profile = client.post('/api/profiles', json={'name': 'Other speaker', 'consent': True}).json()
+    other = upload(client, profile['id'])
+    with client.app.state.store.connect() as c:
+        c.execute('UPDATE profiles SET primary_asset=? WHERE id=?', (other['id'], 'my-voice'))
+    response = client.post('/api/generate', json={'text': 'Wrong reference.'})
+    assert response.status_code == 400 and 'does not belong' in response.json()['detail']

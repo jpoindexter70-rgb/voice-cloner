@@ -230,6 +230,8 @@ def create_app(root=None):
     @app.get('/api/assets/{ident}/audio')
     def play(ident: str):
         asset = store.asset(ident)
+        if not store.path(ident).is_file():
+            raise ValueError('Recording file is missing. Restore it from a verified backup or import the recording again.')
         prefix = 'AI-generated-' if asset['kind'] == 'generated' else 'Recording-'
         return FileResponse(store.path(ident), media_type='audio/wav', filename=prefix + ident[:8] + '.wav')
 
@@ -323,6 +325,10 @@ def create_app(root=None):
                 raise ValueError('Add and choose a reference recording first.')
             reference = store.path(profile['primary_asset'])
             asset = store.asset(profile['primary_asset'])
+            if asset['profile_id'] != body.profile_id or asset['kind'] != 'reference':
+                raise ValueError('Saved primary reference does not belong to this speaker. Choose a valid reference recording.')
+            if not reference.is_file():
+                raise ValueError('Primary reference file is missing. Restore it from a verified backup or import a new reference.')
             if asset['metadata']['seconds'] < 6:
                 raise ValueError('Choose a reference with at least 6 seconds of clear speech.')
             chosen = store.settings()
@@ -403,6 +409,7 @@ def create_app(root=None):
         except Exception as exc:
             ff = str(exc)
         return {'data_directory': str(store.root), 'free_disk_gb': round(shutil.disk_usage(store.root).free / 1024**3, 1),
+                'database': str(store.db), 'preserved_earlier_database': str(store.preserved_database) if store.preserved_database else None,
                 'packages': packages, 'gpu': gpu, 'ffmpeg': ff, 'engine': engine.status(),
                 'privacy': 'Inference is offline. No cloud audio uploads. Bound to loopback by launcher.',
                 'repair': 'Close the studio and run Install or Repair.cmd. This preserves the data directory. Download Models.cmd repairs model files.',

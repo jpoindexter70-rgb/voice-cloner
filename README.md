@@ -85,4 +85,8 @@ If BOTH backups printed VERIFIED BACKUP and installation then stopped at stage 5
 
 If you have not changed recordings/profiles since those verified backups, double-click **Resume Installation.cmd** and answer Y to its backup-state question. It rechecks the newest prior normal ZIP for each source, ignores .incomplete.zip files, and rejects missing/corrupt archives. It does not copy a new full backup or claim that old backups include later changes. If you have added or changed voice data, choose **Install or Repair.cmd** for a fresh backup instead. Both entry points check for a closed server and use the installer mutex.
 
+The installer now checks the real engine imports and watermark runtime, then loads both downloaded models before reporting success. A model-load failure stops installation with its actual error; these checks do not assess personal voice similarity.
+
+Existing databases with additional optional columns are supported through named-column writes. If the existing `studio.sqlite3` has an unfamiliar schema, the app preserves it and uses a separate `studio-v1.sqlite3`; earlier recordings require explicit import. Diagnostics reports both paths. Do not delete an earlier database or recordings to resolve a setup error.
+
 Resume creates a separate new application version directory and continues packages/models installation normally. Keep previous source folders and backup archives intact. It does not grant audit privileges or change file ownership.

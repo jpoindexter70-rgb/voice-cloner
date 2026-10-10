@@ -21,6 +21,9 @@ function addScreen(id, title, content) {
   $('navigation').append(button);
 }
 Object.entries(extraScreens).forEach(([id, [title, content]]) => addScreen(id, title, content));
+for(const [id,name] of Object.entries({recorder:'Record Voice',generate:'Voice Cloning Studio',library:'Family Voice Library',editor:'Recording Editor',settings:'Settings and Diagnostics',engine:'Local AI Engine Manager'})){
+  titles[id]=name;const button=document.querySelector(`nav [data-page="${id}"]`);button.setAttribute('aria-label',name);button.querySelector('span').textContent=name;const heading=$(id).querySelector('h1');if(heading)heading.textContent=name;
+}
 const controlSpecs = {pitch: [-6, 6, .5, 'Pitch (semitones)'], speed: [.5, 2, .05, 'Speaking speed'],
   volume: [0, 2, .05, 'Output volume'], pause_ms: [0, 1500, 10, 'Segment pauses (ms)'],
   exaggeration: [0, 1, .05, 'Expression exaggeration'], cfg_weight: [0, 1, .05, 'Original CFG weight'], temperature: [.1, 1.2, .05, 'Sampling temperature']};
@@ -50,6 +53,7 @@ $('pronunciation-profile').addEventListener('change',protect(loadPronunciation))
 $('save-pronunciation').addEventListener('click',protect(async()=>{const p=await api(`/profiles/${$('pronunciation-profile').value}/preferences`);const rules={};for(const line of $('pronunciation-rules').value.split('\n').filter(s=>s.trim())){const index=line.indexOf('=');if(index<1)throw new Error('Use word = pronunciation on each line.');rules[line.slice(0,index).trim()]=line.slice(index+1).trim();}p.pronunciation=rules;await api(`/profiles/${$('pronunciation-profile').value}/preferences`,{method:'PUT',body:p});notify('Pronunciation dictionary saved.');}));
 function loadReferences(){options($('tts-reference'),assets.filter(a=>a.profile_id===$('tts-profile').value&&a.kind==='reference'),a=>a.name);}
 $('tts-profile').addEventListener('change',loadReferences);
+$('generate-profile').addEventListener('change',protect(async()=>{const p=await api(`/profiles/${$('generate-profile').value}/preferences`);for(const [id,key] of [['temperature','temperature'],['exaggeration','exaggeration'],['cfg','cfg_weight'],['pause-ms','pause_ms']]){$(id).value=p.controls[key];if($(id+'-value'))$(id+'-value').textContent=p.controls[key];}}));
 async function submitSpeech(preview){await api('/queue',{method:'POST',body:{profile_id:$('tts-profile').value,reference_id:$('tts-reference').value||null,text:$('tts-text').value,preview}});show('queue');await renderQueue();notify('Local speech job queued.');}
 $('tts-preview').addEventListener('click',protect(()=>submitSpeech(true)));$('tts-generate').addEventListener('click',protect(()=>submitSpeech(false)));
 function characterOptions(){const previous={...activeProject?.characters};document.querySelectorAll('#character-voices select').forEach(s=>previous[s.dataset.character]=s.value);$('character-voices').replaceChildren();const names=[...new Set($('story-text').value.split('\n').map(line=>line.match(/^([^:#]{1,60}):/)).filter(Boolean).map(m=>m[1].trim()))];for(const name of names){const label=document.createElement('label');label.textContent=name;const select=document.createElement('select');select.dataset.character=name;options(select,profiles,p=>p.name,previous[name]||$('story-narrator').value);label.append(select);$('character-voices').append(label);}}

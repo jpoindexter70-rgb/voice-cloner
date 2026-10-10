@@ -291,7 +291,7 @@ class PersistentQueue:
             raise ValueError('Choose an available reference with at least six seconds of clear speech.')
         settings = self.store.settings()
         if self.engine.missing(settings['engine']):
-            raise ValueError('Download the selected model in Local AI Engine Manager first.')
+            raise ValueError('Selected model is not installed. Download it in Local AI Engine Manager first.')
         if body.project_id:
             self.workspace.project(body.project_id)
         controls = body.controls or VoiceControls(**self.workspace.preferences(body.profile_id)['controls'])
@@ -529,7 +529,7 @@ def register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle,
                 if not profile['primary_asset']:
                     raise ValueError('Add a reference for ' + profile['name'] + ' first.')
                 ref = store.asset(profile['primary_asset'])
-                if ref['metadata']['seconds'] < 6 or not store.path(ref['id']).is_file():
+                if ref['profile_id'] != entry.profile_id or ref['kind'] != 'reference' or ref['metadata']['seconds'] < 6 or not store.path(ref['id']).is_file():
                     raise ValueError('A story speaker needs an available six-second reference.')
             return [queue.submit(entry) for entry in entries]
 

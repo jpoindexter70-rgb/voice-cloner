@@ -1,6 +1,8 @@
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+from pathlib import Path
 
-datas = [('studio/static', 'studio/static'), ('docs/THIRD-PARTY-NOTICES.md', 'licenses')]
+root = Path(SPECPATH).parent
+datas = [(str(root / 'studio/static'), 'studio/static'), (str(root / 'docs/THIRD-PARTY-NOTICES.md'), 'licenses')]
 binaries = []
 hiddenimports = ['uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto',
     'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan.on', 'PySide6.QtWebEngineWidgets',
@@ -15,7 +17,7 @@ datas += collect_data_files('tokenizers')
 hiddenimports += collect_submodules('transformers.models.llama')
 hiddenimports += collect_submodules('transformers.models.gpt2')
 
-a = Analysis(['scripts/desktop_entry.py'], pathex=['.'], binaries=binaries,
+a = Analysis([str(root / 'scripts/desktop_entry.py')], pathex=[str(root)], binaries=binaries,
     datas=datas, hiddenimports=hiddenimports,
     excludes=['gradio', 'gradio_client', 'matplotlib', 'tkinter', 'IPython', 'pytest'],
     noarchive=False)

@@ -102,7 +102,8 @@ $('test-my-voice').addEventListener('click',()=>{$('generate-profile').value='my
 $('script').addEventListener('input',()=>$('char-count').textContent=`${$('script').value.length.toLocaleString()} / 20,000`);
 async function generate() {
   if(currentJob)throw new Error('Generation is already running.');
-  const result=await api('/generate',{method:'POST',body:{profile_id:$('generate-profile').value,text:$('script').value,temperature:Number($('temperature').value),exaggeration:Number($('exaggeration').value),cfg_weight:Number($('cfg').value),pause_ms:Number($('pause-ms').value)}});
+  const preferences=await api(`/profiles/${$('generate-profile').value}/preferences`);
+  const result=await api('/queue',{method:'POST',body:{profile_id:$('generate-profile').value,text:$('script').value,controls:{...preferences.controls,temperature:Number($('temperature').value),exaggeration:Number($('exaggeration').value),cfg_weight:Number($('cfg').value),pause_ms:Number($('pause-ms').value)}}});
   currentJob=result.id;$('generate-button').disabled=true;$('cancel-generation').disabled=false;$('generation-progress').hidden=false;
   try {
     while(currentJob) {
@@ -115,7 +116,7 @@ async function generate() {
   } finally {currentJob=null;$('generate-button').disabled=false;$('cancel-generation').disabled=true;}
 }
 $('generate-button').addEventListener('click',protect(generate));$('regenerate').addEventListener('click',protect(generate));
-$('cancel-generation').addEventListener('click',protect(async()=>{if(currentJob){const response=await api(`/jobs/${currentJob}/cancel`,{method:'POST'});notify(response.notice);}}));
+$('cancel-generation').addEventListener('click',protect(async()=>{if(currentJob){const response=await api(`/queue/${currentJob}/cancel`,{method:'POST'});notify(response.notice || "Cancellation requested; completed segments remain available for Resume.");}}));
 function showResult(asset) {
   resultAsset=asset;$('generation-result').hidden=false;
   const reference=asset.metadata.reference_id || assets.find(a=>a.id===asset.metadata.source_asset)?.metadata.reference_id;

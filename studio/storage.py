@@ -3,6 +3,7 @@ import os
 import sqlite3
 import uuid
 import warnings
+from contextlib import closing
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -19,6 +20,15 @@ def data_directory():
     return Path.home() / '.local' / 'share' / 'voice-control-room'
 
 
+class ClosingConnection(sqlite3.Connection):
+    """Commit/rollback transactions and release Windows file handles on exit."""
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 class Store:
     COLUMNS = {
         'profiles': {'id', 'name', 'kind', 'authorization', 'created', 'primary_asset'},
@@ -32,7 +42,7 @@ class Store:
         if not path.exists():
             return True
         # Inspect without changing an unfamiliar database, including its journal.
-        with sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True) as c:
+        with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as c:
             for table, required in cls.COLUMNS.items():
                 columns = c.execute(f'PRAGMA table_info({table})').fetchall()
                 if not columns:
@@ -82,7 +92,7 @@ class Store:
             self.db.chmod(0o600)
 
     def connect(self):
-        c = sqlite3.connect(self.db, timeout=30)
+        c = sqlite3.connect(self.db, timeout=30, factory=ClosingConnection)
         c.row_factory = sqlite3.Row
         return c
 

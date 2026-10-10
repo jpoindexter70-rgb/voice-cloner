@@ -1,0 +1,89 @@
+name: Windows desktop installer
+on:
+  push:
+    branches: [main, 'build/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-install:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      VCR_DATA_DIR: '${{ github.workspace }}\test-data'
+      HF_HOME: '${{ github.workspace }}\hf-cache'
+      NUMBA_CACHE_DIR: '${{ github.workspace }}\numba-cache'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: 'requirements*.txt'
+      - name: Install pinned runtime and test dependencies
+        run: |
+          python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
+          python -m pip check
+      - name: Run Windows backend regressions
+        run: |
+          choco install ffmpeg --yes --no-progress
+          python -m pytest -q
+      - name: Build bundled Python desktop app
+        run: python -m PyInstaller --noconfirm --clean packaging/family-voice.spec
+      - name: Validate frozen runtime and audio
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/FamilyVoiceCloner/FamilyVoiceCloner.exe -ArgumentList '--self-test', 'frozen-report.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Frozen self-test failed' }
+          if (!(Test-Path frozen-report.json)) { throw 'Missing current frozen report' }
+          Get-Content frozen-report.json
+      - name: Package genuine Windows installer
+        shell: pwsh
+        run: |
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' packaging/windows-installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+      - name: Install exact artifact, launch native window, test update and uninstall preservation
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem dist/installer/*Setup.exe).FullName
+          $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=installer-test.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Installer failed' }
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          if (!(Test-Path $exe)) { throw 'Installed app is missing' }
+          $p = Start-Process $exe -ArgumentList '--self-test', 'installed-report.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Test-Path installed-report.json)) { throw 'Installed runtime failed' }
+          $p = Start-Process $exe -ArgumentList '--smoke-test', 'desktop-report.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Test-Path desktop-report.json)) { throw 'Native window test failed' }
+          New-Item -ItemType Directory -Force $env:VCR_DATA_DIR | Out-Null
+          Set-Content "$env:VCR_DATA_DIR\preserve-me.txt" 'recordings must survive'
+          $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Repair/update failed' }
+          if (!(Test-Path "$env:VCR_DATA_DIR\preserve-me.txt")) { throw 'Update removed user data' }
+          $p = Start-Process "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Uninstall failed' }
+          if (!(Test-Path "$env:VCR_DATA_DIR\preserve-me.txt")) { throw 'Uninstall removed user data' }
+      - name: Source archive and checksums
+        shell: pwsh
+        run: |
+          git archive --format=zip --output=dist/installer/Family-AI-Voice-Cloner-Pro-Source.zip HEAD
+          Get-ChildItem dist/installer/* | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-String | Set-Content dist/installer/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: Family-AI-Voice-Cloner-Pro-Windows-Candidate
+          path: |
+            dist/installer/
+            *report.json
+            desktop-report.png
+            installer-test.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: Windows-build-diagnostics
+          path: |
+            *report.json
+            *report.png
+            *.log
+            test-data/logs/

@@ -60,6 +60,8 @@ class EditIn(BaseModel):
     denoise: bool = False
     speed: float = Field(default=1, ge=.5, le=2)
     pitch: float = Field(default=0, ge=-6, le=6)
+    volume: float = Field(default=1, ge=0, le=2)
+    normalize: bool = False
 
 
 class ReviewIn(BaseModel):
@@ -425,5 +427,47 @@ def create_app(root=None):
             if app.state.shutdown:
                 app.state.shutdown()
         return {'stopping': True}
+
+    from .workflows import register_workflows
+    register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle, GenerationIn)
+
+    @app.get('/api/engine/operation')
+    def operation():
+        return getattr(app.state, 'model_operation', {'status': 'idle', 'message': ''})
+
+    @app.post('/api/engine/download/{name}')
+    def download_model(name: str):
+        from .engine import MODELS
+        if name not in MODELS:
+            raise ValueError('Choose Chatterbox Original or Turbo.')
+        with mutation_lock:
+            idle()
+            if not engine.lock.acquire(blocking=False):
+                raise HTTPException(409, 'Engine busy.')
+            app.state.model_operation = {'status': 'downloading', 'message': 'Contacting official model repository…'}
+            def download():
+                try:
+                    from .cli import download, verify
+                    engine.unload()
+                    download(name, progress=lambda text: setattr(app.state, 'model_operation',
+                             {'status': 'downloading', 'message': text}))
+                    verify(name)
+                    app.state.model_operation = {'status': 'complete', 'message': 'Model downloaded and integrity verified. Select Load engine.'}
+                except Exception as exc:
+                    app.state.model_operation = {'status': 'failed', 'message': str(exc)}
+                    engine.message = str(exc)
+                finally:
+                    engine.lock.release()
+            threading.Thread(target=download, name='model-download', daemon=True).start()
+        return {'status': 'downloading'}
+
+    @app.post('/api/engine/stop')
+    def stop_engine():
+        with mutation_lock:
+            idle()
+            with engine.lock:
+                engine.unload()
+                engine.message = 'Engine stopped. Recordings and models remain saved.'
+        return engine.status()
 
     return app

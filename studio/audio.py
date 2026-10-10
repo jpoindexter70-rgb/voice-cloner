@@ -46,8 +46,13 @@ def analyze(audio, sr):
         warnings.append('Clipping detected. Reduce microphone gain and record again.')
     if rms < .01:
         warnings.append('Very quiet audio. Move closer to the microphone or increase gain.')
+    windows = [audio[i:i + max(1, sr // 20)] for i in range(0, len(audio), max(1, sr // 20))]
+    quiet_rms = float(np.quantile([np.sqrt(np.mean(w ** 2)) for w in windows], .1))
+    if quiet_rms > .02:
+        warnings.append('The quietest passages are loud. Check for background noise or record pauses; continuous speech can also trigger this warning.')
     return {'seconds': round(seconds, 3), 'sample_rate': sr, 'peak_db': round(20 * np.log10(max(peak, 1e-9)), 1),
-            'rms_db': round(20 * np.log10(max(rms, 1e-9)), 1), 'clipped_fraction': clipped, 'warnings': warnings}
+            'rms_db': round(20 * np.log10(max(rms, 1e-9)), 1), 'clipped_fraction': clipped,
+            'quiet_floor_db': round(20 * np.log10(max(quiet_rms, 1e-9)), 1), 'warnings': warnings}
 
 
 def waveform(path, points=800):
@@ -56,7 +61,7 @@ def waveform(path, points=800):
     return {'peaks': [float(np.max(np.abs(g))) for g in groups], 'seconds': len(x) / sr}
 
 
-def edit(source, target, start, end, remove_silence, denoise, speed, pitch):
+def edit(source, target, start, end, remove_silence, denoise, speed, pitch, volume=1, normalize=False):
     x, sr = sf.read(source, dtype='float32')
     duration = len(x) / sr
     end = duration if end is None else end
@@ -95,6 +100,12 @@ def edit(source, target, start, end, remove_silence, denoise, speed, pitch):
         finally:
             temp.unlink(missing_ok=True)
     x, sr = sf.read(target, dtype='float32')
+    if normalize:
+        peak = np.max(np.abs(x))
+        if peak > 0:
+            x = x * (.95 / peak)
+    x = np.clip(x * volume, -1, 1)
+    sf.write(target, x, sr, subtype='PCM_16')
     return analyze(x, sr)
 
 

@@ -50,7 +50,7 @@ def digest(path):
     return value.hexdigest()
 
 
-def download(name):
+def download(name, progress=None):
     # Only this explicit command accesses model servers. No audio is involved.
     os.environ.pop('HF_HUB_OFFLINE', None)
     os.environ.pop('TRANSFORMERS_OFFLINE', None)
@@ -68,12 +68,16 @@ def download(name):
     for item in info.siblings:
         if item.rfilename not in wanted:
             continue
+        if progress:
+            progress('Downloading ' + item.rfilename + ' from the official repository. Large files may take several minutes.')
         path = Path(hf_hub_download(info.id, item.rfilename, revision=info.sha, local_dir=directory))
         actual = digest(path)
         if item.lfs and item.lfs.sha256 and actual != item.lfs.sha256:
             raise RuntimeError('Model checksum mismatch: ' + item.rfilename + '. File is not trusted; retry download.')
         manifest['files'][item.rfilename] = {'sha256': actual, 'size': path.stat().st_size}
         print('Verified:', item.rfilename, flush=True)
+        if progress:
+            progress('SHA-256 verified: ' + item.rfilename)
     missing = engine.missing(name)
     if missing:
         raise RuntimeError('Repository is missing required model files: ' + ', '.join(missing))

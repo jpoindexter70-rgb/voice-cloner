@@ -84,6 +84,14 @@ jobs:
             *report.json
             desktop-report.png
             installer-test.log
+      - name: Expose packaged startup diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path test-data/logs/desktop.log) {
+            $message = (Get-Content test-data/logs/desktop.log -Tail 35) -join '%0A'
+            Write-Output "::error title=Packaged startup diagnostics::$message"
+          }
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

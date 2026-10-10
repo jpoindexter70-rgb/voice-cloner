@@ -16,7 +16,9 @@ for package in ['perth', 'chatterbox', 'imageio_ffmpeg', 's3tokenizer', 'librosa
     hiddenimports += imports
 datas += collect_data_files('transformers', include_py_files=True)
 datas += collect_data_files('tokenizers')
-for distribution in ['chatterbox-tts', 'resemble-perth', 'setuptools', 'imageio-ffmpeg', 'backports.tarfile']:
+for distribution in ['chatterbox-tts', 'resemble-perth', 'setuptools', 'imageio-ffmpeg', 'backports.tarfile',
+                     'requests', 'filelock', 'numpy', 'tqdm', 'regex', 'packaging',
+                     'tokenizers', 'huggingface-hub', 'safetensors', 'PyYAML', 'diffusers', 'transformers']:
     datas += copy_metadata(distribution)
 hiddenimports += collect_submodules('transformers.models.llama')
 hiddenimports += collect_submodules('transformers.models.gpt2')

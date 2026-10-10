@@ -9,6 +9,10 @@ on:
         description: 'Publish artifacts from a completed successful installer build; empty builds normally'
         required: false
         type: string
+      repackage_run:
+        description: 'Reuse a successful identical bundled application for installer-only changes'
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -19,6 +23,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.verified_build_run == ''
     runs-on: windows-2022
     timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
     env:
       VCR_DATA_DIR: '${{ github.workspace }}\test-data'
       HF_HOME: '${{ github.workspace }}\hf-cache'
@@ -28,16 +35,19 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
+        if: inputs.repackage_run == ''
         with:
           python-version: '3.11'
           cache: pip
           cache-dependency-path: 'requirements*.txt'
       - name: Install pinned runtime and test dependencies
+        if: inputs.repackage_run == ''
         run: |
           python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
           python -m pip check
       - name: Run Windows backend regressions
+        if: inputs.repackage_run == ''
         shell: pwsh
         run: |
           choco install ffmpeg --yes --no-progress
@@ -46,7 +56,34 @@ jobs:
           Get-Content backend-tests.log
           exit $result
       - name: Build bundled Python desktop app
+        if: inputs.repackage_run == ''
         run: python -m PyInstaller --noconfirm --clean packaging/family-voice.spec
+      - name: Reuse verified identical application for installer-only changes
+        if: inputs.repackage_run != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPACKAGE_RUN: ${{ inputs.repackage_run }}
+        run: |
+          if ($env:REPACKAGE_RUN -notmatch '^[0-9]+$') { throw 'Invalid reuse run' }
+          $run = gh run view $env:REPACKAGE_RUN --json conclusion,status,workflowName,headSha | ConvertFrom-Json
+          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.workflowName -ne 'Windows desktop installer') { throw 'Reuse build is not verified' }
+          git fetch origin $run.headSha --depth=1
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify prior source' }
+          git diff --exit-code $run.headSha HEAD -- studio 'requirements*.txt' scripts/desktop_entry.py packaging/family-voice.spec docs/THIRD-PARTY-NOTICES.md
+          if ($LASTEXITCODE -ne 0) { throw 'Application changed; a fresh application build is required' }
+          gh run download $env:REPACKAGE_RUN --name Family-AI-Voice-Cloner-Pro-Windows-Candidate --dir previous
+          if ($LASTEXITCODE -ne 0) { throw 'Verified artifact download failed' }
+          $previousInstaller = (Get-ChildItem previous -Recurse -Filter '*Setup.exe').FullName
+          $previousDir = Join-Path $env:RUNNER_TEMP 'verified-family-app'
+          $p = Start-Process $previousInstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$previousDir`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Prior verified installer failed' }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $previousDir dist/FamilyVoiceCloner -Recurse
+          Remove-Item dist/FamilyVoiceCloner/unins* -Force
+          $p = Start-Process "$previousDir/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Prior installer cleanup failed' }
       - name: Validate frozen runtime and audio
         shell: pwsh
         run: |
@@ -65,6 +102,7 @@ jobs:
           $installer = (Get-ChildItem dist/installer/*Setup.exe).FullName
           $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=installer-test.log' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Installer failed' }
+          if (!(Select-String -Path installer-test.log -SimpleMatch 'Installed Python/backend/reference upload/WAV/MP3 verification passed.')) { throw 'Installer did not verify its bundled runtime' }
           $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
           if (!(Test-Path $exe)) { throw 'Installed app is missing' }
           $p = Start-Process $exe -ArgumentList '--self-test', 'installed-report.json' -Wait -PassThru
@@ -135,10 +173,10 @@ jobs:
           gh run download $env:BUILD_RUN --name Family-AI-Voice-Cloner-Pro-Windows-Candidate --dir candidate
           if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
           $installer = (Get-ChildItem candidate -Recurse -Filter '*Setup.exe').FullName
+          $env:PATH = "$env:SYSTEMROOT\System32;$env:SYSTEMROOT"
           $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Install failed' }
           $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
-          $env:PATH = "$env:SYSTEMROOT\System32;$env:SYSTEMROOT"
           $p = Start-Process $exe -ArgumentList '--self-test', 'isolated-runtime-report.json' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Test-Path isolated-runtime-report.json)) { throw 'Bundled runtime needs external tools' }
           $p = Start-Process $exe -ArgumentList '--smoke-test', 'isolated-desktop-report.json' -Wait -PassThru

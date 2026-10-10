@@ -27,9 +27,13 @@ jobs:
           python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
           python -m pip check
       - name: Run Windows backend regressions
+        shell: pwsh
         run: |
           choco install ffmpeg --yes --no-progress
-          python -m pytest -q
+          python -m pytest -q --junitxml=backend-test-report.xml > backend-tests.log 2>&1
+          $result = $LASTEXITCODE
+          Get-Content backend-tests.log
+          exit $result
       - name: Build bundled Python desktop app
         run: python -m PyInstaller --noconfirm --clean packaging/family-voice.spec
       - name: Validate frozen runtime and audio
@@ -86,4 +90,5 @@ jobs:
             *report.json
             *report.png
             *.log
+            backend-test-report.xml
             test-data/logs/

@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 import zipfile
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -300,10 +301,28 @@ class PersistentQueue:
             raise ValueError('Enter text to generate.')
         if body.preview:
             original = re.split(r'(?<=[.!?])\s+', original)[0][:240]
-        text = self.workspace.pronounce(body.profile_id, original)
-        parts = segments(text)
+        text = original
+        unmarked = re.sub(r'\[emphasis\].*?\[/emphasis\]', '', text, flags=re.DOTALL)
+        if '[emphasis]' in unmarked or '[/emphasis]' in unmarked:
+            raise ValueError('Close every emphasized phrase with [/emphasis].')
+        parts, emphasis = [], []
+        for piece in re.split(r'(\[emphasis\].*?\[/emphasis\])', text, flags=re.DOTALL):
+            marked = piece.startswith('[emphasis]') and piece.endswith('[/emphasis]')
+            piece = piece[len('[emphasis]'):-len('[/emphasis]')] if marked else piece
+            piece = self.workspace.pronounce(body.profile_id, piece)
+            for sentence in re.split(r'(?<=[.!?])\s+', piece.strip()):
+                for part in segments(sentence):
+                    if not re.search(r'\w', part) and parts:
+                        parts[-1] += part
+                        continue
+                    if marked:
+                        emphasis.append(len(parts))
+                    parts.append(part)
+        if not parts:
+            raise ValueError('Enter spoken text, including any emphasized words.')
+        original = original.replace('[emphasis]', '').replace('[/emphasis]', '')
         item = {'id': uuid.uuid4().hex, 'created': now(), 'status': 'queued', 'completed': 0,
-                'total': len(parts), 'parts': parts, 'text': original, 'profile_id': body.profile_id,
+                'total': len(parts), 'parts': parts, 'emphasis': emphasis, 'text': original, 'profile_id': body.profile_id,
                 'reference_id': reference_id, 'settings': settings, 'controls': controls.model_dump(),
                 'project_id': body.project_id, 'replace_clip': body.replace_clip, 'cancel': False}
         self.save(item)
@@ -370,6 +389,8 @@ class PersistentQueue:
                 checkpoint = directory / f'{index:04}.wav'
                 if checkpoint.is_file():
                     wave, sr = sf.read(checkpoint, dtype='float32')
+                    if wave.ndim != 1 or not len(wave) or not np.isfinite(wave).all():
+                        raise ValueError('Saved segment checkpoint is invalid. Create a new job or restore a verified backup.')
                 else:
                     request = self.generation_model(profile_id=item['profile_id'], text=text,
                         temperature=control.temperature, exaggeration=control.exaggeration,
@@ -381,9 +402,13 @@ class PersistentQueue:
                 if rate is not None and rate != sr:
                     raise ValueError('Checkpoint sample rate changed; start a new job.')
                 rate = sr
+                if index in item.get('emphasis', []):
+                    wave = np.clip(wave * 1.25, -1, 1)
                 waves.append(wave)
                 if index < len(item['parts']) - 1:
-                    waves.append(np.zeros(round(sr * control.pause_ms / 1000), dtype=np.float32))
+                    # Emphasis splits are phrase boundaries, not sentence pauses.
+                    pause = 0 if index in item.get('emphasis', []) or index + 1 in item.get('emphasis', []) else control.pause_ms
+                    waves.append(np.zeros(round(sr * pause / 1000), dtype=np.float32))
                 item['completed'] = index + 1
                 item['cancel'] = self.get(item['id'])['cancel']
                 self.save(item)
@@ -503,13 +528,17 @@ def register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle,
             return queue.resume(ident)
 
     @app.post('/api/projects/{ident}/generate')
-    def generate_story(ident: str):
+    def generate_story(ident: str, chapter: int | None = None):
         with mutation_lock:
             project = workspace.project(ident)
             entries = []
+            current_chapter = -1
             for paragraph in project['text'].splitlines():
                 paragraph = paragraph.strip()
-                if not paragraph or paragraph.startswith('#'):
+                if paragraph.startswith('#'):
+                    current_chapter += 1
+                    continue
+                if not paragraph or (chapter is not None and current_chapter != chapter):
                     continue
                 speaker = project['narrator']
                 if ':' in paragraph:
@@ -544,7 +573,7 @@ def register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle,
             try:
                 import sqlite3
                 snapshot = temporary / 'database.sqlite3'
-                with store.connect() as source, sqlite3.connect(snapshot) as target:
+                with closing(store.connect()) as source, closing(sqlite3.connect(snapshot)) as target:
                     source.backup(target)
                 entries = {'database.sqlite3': snapshot}
                 for asset in store.assets():
@@ -614,7 +643,7 @@ def register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle,
                     database = staging / 'database.sqlite3'
                     if not database.is_file() or not Store.compatible(database):
                         raise ValueError('Backup database is missing or incompatible.')
-                    with sqlite3.connect(database) as c:
+                    with closing(sqlite3.connect(database)) as c:
                         if c.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                             raise ValueError('Backup database failed SQLite integrity checks.')
                         assets = c.execute('SELECT id FROM assets').fetchall()
@@ -624,7 +653,7 @@ def register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle,
                     # Preserve the complete current state before restoring anything.
                     preserved = store.root.parent / ('VoiceControlRoom-before-restore-' + uuid.uuid4().hex)
                     preserved.mkdir(mode=0o700)
-                    with store.connect() as source, sqlite3.connect(preserved / store.db.name) as dest:
+                    with closing(store.connect()) as source, closing(sqlite3.connect(preserved / store.db.name)) as dest:
                         source.backup(dest)
                     shutil.copytree(store.audio, preserved / 'audio')
                     if (store.root / 'checkpoints').exists():
@@ -637,7 +666,7 @@ def register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle,
                         for path in (staging / 'checkpoints').glob('*/*.wav'):
                             target = store.root / path.relative_to(staging);target.parent.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(path, target)
-                        with sqlite3.connect(database) as source, store.connect() as dest:
+                        with closing(sqlite3.connect(database)) as source, closing(store.connect()) as dest:
                             source.backup(dest)
                         Workspace(store)
                         with jobs_lock:

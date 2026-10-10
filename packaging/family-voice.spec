@@ -6,7 +6,8 @@ datas = [(str(root / 'studio/static'), 'studio/static'), (str(root / 'docs/THIRD
 binaries = []
 hiddenimports = ['uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto',
     'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan.on', 'PySide6.QtWebEngineWidgets',
-    'PySide6.QtWebEngineCore', 'PySide6.QtNetwork', 'chatterbox.tts', 'chatterbox.tts_turbo']
+    'PySide6.QtWebEngineCore', 'PySide6.QtNetwork', 'chatterbox.tts', 'chatterbox.tts_turbo',
+    'backports', 'backports.tarfile']
 for package in ['perth', 'chatterbox', 'imageio_ffmpeg', 's3tokenizer', 'librosa', 'diffusers']:
     data, binary, imports = collect_all(package)
     datas += data

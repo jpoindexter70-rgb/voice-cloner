@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import zipfile
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -36,7 +37,8 @@ def inventory(source):
 def backup_attempt(source, destination):
     print('Scanning existing files for backup:', source, flush=True)
     files = inventory(source)
-    stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+    # Windows clocks can return the same wall timestamp for immediate retry attempts.
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '-' + uuid.uuid4().hex
     target = destination / (source.name + '-' + stamp + '.zip')
     partial = target.with_suffix('.incomplete.zip')
     total = sum(details[0] for details in files.values())

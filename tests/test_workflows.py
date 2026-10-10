@@ -151,3 +151,12 @@ def test_noise_clipping_low_volume_and_normalization(tmp_path):
     sf.write(source,np.sin(np.arange(48000)*.05)*.1,24000)
     edit(source,target,0,None,False,False,1,0,normalize=True,volume=.5)
     x,sr=sf.read(target);assert .47<np.max(np.abs(x))<.48
+
+
+@pytest.mark.parametrize('speed,pitch',[(.5,6),(2,-6)])
+def test_extreme_pitch_speed_combinations_use_supported_ffmpeg_tempo(tmp_path,speed,pitch):
+    from studio.audio import edit
+    source=tmp_path/'source.wav';target=tmp_path/'edited.wav'
+    sf.write(source,np.sin(np.arange(240000)*.05)*.1,24000)
+    result=edit(source,target,0,None,False,False,speed,pitch)
+    assert abs(result['seconds']-10/speed)<.25

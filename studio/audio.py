@@ -89,7 +89,14 @@ def edit(source, target, start, end, remove_silence, denoise, speed, pitch, volu
     sf.write(target, x, sr, subtype='PCM_16')
     if speed != 1 or pitch != 0:
         ratio = 2 ** (pitch / 12)
-        filters = f'asetrate={sr * ratio},aresample={sr},atempo={speed / ratio}'
+        tempo = speed / ratio
+        stages = []
+        while tempo < .5:
+            stages.append('atempo=0.5'); tempo /= .5
+        while tempo > 2:
+            stages.append('atempo=2'); tempo /= 2
+        stages.append(f'atempo={tempo}')
+        filters = f'asetrate={sr * ratio},aresample={sr},' + ','.join(stages)
         temp = target.with_name(uuid.uuid4().hex + '.wav')
         try:
             proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-i', str(target),

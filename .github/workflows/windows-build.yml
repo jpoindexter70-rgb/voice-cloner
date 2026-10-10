@@ -109,6 +109,7 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Test-Path installed-report.json)) { throw 'Installed runtime failed' }
           $p = Start-Process $exe -ArgumentList '--smoke-test', 'desktop-report.json' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Test-Path desktop-report.json)) { throw 'Native window test failed' }
+          & ./scripts/windows-ui-check.ps1 -Exe $exe -Report visual-report.json -Screenshot desktop-report.png
           $p = Start-Process $exe -ArgumentList '--model-test', 'neural-report.json' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Test-Path neural-report.json)) { throw 'Installed real model test failed' }
           New-Item -ItemType Directory -Force $env:VCR_DATA_DIR | Out-Null
@@ -164,6 +165,9 @@ jobs:
       BUILD_RUN: ${{ inputs.verified_build_run }}
       VCR_DATA_DIR: '${{ github.workspace }}\isolated-runtime-data'
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Install verified artifact and run with system-only search path
         shell: pwsh
         run: |
@@ -181,6 +185,7 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Test-Path isolated-runtime-report.json)) { throw 'Bundled runtime needs external tools' }
           $p = Start-Process $exe -ArgumentList '--smoke-test', 'isolated-desktop-report.json' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Test-Path isolated-desktop-report.json)) { throw 'Native window failed with isolated PATH' }
+          & ./scripts/windows-ui-check.ps1 -Exe $exe -Report isolated-visual-report.json -Screenshot isolated-desktop-report.png
           Get-Content isolated-runtime-report.json
           Get-Content isolated-desktop-report.json
       - uses: actions/upload-artifact@v4
@@ -223,6 +228,14 @@ jobs:
           jq -e '.status == "completed" and .conclusion == "success" and .workflowName == "Windows desktop installer"' build.json
           revision=$(jq -r '.headSha' build.json)
           gh run download "$BUILD_RUN" --name Family-AI-Voice-Cloner-Pro-Windows-Candidate --dir candidate
+          gh run download "$GITHUB_RUN_ID" --name Isolated-Windows-runtime-verification --dir isolated
+          visual_report=$(find isolated -name 'isolated-visual-report.json' -print -quit)
+          test -n "$visual_report"
+          jq -e '.native_window == true and .real_desktop_pixels == true and .blue_pixels >= 25 and .bright_pixels >= 20' "$visual_report"
+          visual_png=$(find isolated -name 'isolated-desktop-report.png' -print -quit)
+          test -n "$visual_png"
+          cp "$visual_png" "$(find candidate -name 'desktop-report.png' -print -quit)"
+          cp "$visual_report" candidate/visual-report.json
           neural_report=$(find candidate -name 'neural-report.json' -print -quit)
           test -n "$neural_report"
           jq -e '.models | length == 2 and all(.real_neural_synthesis == true and .reference_conditioning == true and .wav_mp3_decode == true)' "$neural_report"

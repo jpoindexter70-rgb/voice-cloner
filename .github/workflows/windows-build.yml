@@ -109,7 +109,48 @@ jobs:
             backend-test-report.xml
             test-data/logs/
 
+  verify-bundled-runtime:
+    if: github.event_name == 'workflow_dispatch' && inputs.verified_build_run != ''
+    runs-on: windows-2022
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN: ${{ inputs.verified_build_run }}
+      VCR_DATA_DIR: '${{ github.workspace }}\isolated-runtime-data'
+    steps:
+      - name: Install verified artifact and run with system-only search path
+        shell: pwsh
+        run: |
+          if ($env:BUILD_RUN -notmatch '^[0-9]+$') { throw 'Invalid build run' }
+          $run = gh run view $env:BUILD_RUN --json conclusion,status,workflowName | ConvertFrom-Json
+          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.workflowName -ne 'Windows desktop installer') { throw 'Build is not verified' }
+          gh run download $env:BUILD_RUN --name Family-AI-Voice-Cloner-Pro-Windows-Candidate --dir candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
+          $installer = (Get-ChildItem candidate -Recurse -Filter '*Setup.exe').FullName
+          $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Install failed' }
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          $env:PATH = "$env:SYSTEMROOT\System32;$env:SYSTEMROOT"
+          $p = Start-Process $exe -ArgumentList '--self-test', 'isolated-runtime-report.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Test-Path isolated-runtime-report.json)) { throw 'Bundled runtime needs external tools' }
+          $p = Start-Process $exe -ArgumentList '--smoke-test', 'isolated-desktop-report.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Test-Path isolated-desktop-report.json)) { throw 'Native window failed with isolated PATH' }
+          Get-Content isolated-runtime-report.json
+          Get-Content isolated-desktop-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Isolated-Windows-runtime-verification
+          path: |
+            isolated-*-report.json
+            isolated-*-report.png
+            isolated-runtime-data/logs/
+
   publish-verified-candidate:
+    needs: verify-bundled-runtime
     if: github.event_name == 'workflow_dispatch' && inputs.verified_build_run != ''
     runs-on: ubuntu-latest
     permissions:
@@ -138,7 +179,7 @@ jobs:
           cat > notes.md <<'NOTES'
           Python Windows desktop preview with bundled runtime, local Chatterbox Original/Turbo, family profiles, recording/editing, per-person controls, story/project workflows, timeline, persistent queue and WAV/MP3 export.
 
-          This exact installer passed Windows backend regressions, frozen and installed runtime checks, native window launch, genuine Original/Turbo CPU speech generation with AI-generated test references, update and uninstall data-preservation checks on a hosted Windows runner.
+          This exact installer passed Windows backend regressions, frozen and installed runtime checks, native window launch, genuine Original/Turbo CPU speech generation with AI-generated test references, update and uninstall data-preservation checks on a hosted Windows runner. A separate installed-app check also passed with a system-only search path, without Python or FFmpeg on PATH.
 
           Preview limitations: unsigned CPU build; a clean consumer Windows PC, physical microphone, RTX 2060/CUDA and personal family-voice similarity are not certified. The complete 46-feature master specification is not fully accepted; see docs/FEATURE-VERIFICATION.md in the matching source ZIP. Models are downloaded separately after confirmation in the app. Use only recordings you have permission to clone.
           NOTES

@@ -206,3 +206,29 @@ def test_application_shutdown_stops_queue_worker_and_reopen_preserves_audio(tmp_
         assert app.state.queue.stop_event.is_set()
         assert not app.state.queue.thread.is_alive()
         assert len(app.state.store.assets()) == index + 2
+
+
+def test_restore_earlier_release_backup_migrates_profile_details(client, tmp_path):
+    import hashlib
+    import sqlite3
+    archive = client.get('/api/backup')
+    archive.raise_for_status()
+    with zipfile.ZipFile(io.BytesIO(archive.content)) as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    database = tmp_path / 'old.sqlite3'
+    database.write_bytes(entries['database.sqlite3'])
+    connection = sqlite3.connect(database)
+    connection.execute('DROP TABLE profile_details')
+    connection.commit(); connection.close()
+    entries['database.sqlite3'] = database.read_bytes()
+    manifest = json.loads(entries['manifest.json'])
+    manifest['files']['database.sqlite3'] = hashlib.sha256(entries['database.sqlite3']).hexdigest()
+    entries['manifest.json'] = json.dumps(manifest).encode()
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, 'w') as target:
+        for name, content in entries.items():
+            target.writestr(name, content)
+    restored = client.post('/api/restore', files={'file': ('earlier-backup.zip', out.getvalue())})
+    assert restored.status_code == 200, restored.text
+    assert client.get('/api/profiles').json()[0]['details'] == {}
+    assert client.patch('/api/profiles/my-voice', json={'name': 'Recovered', 'accent_notes': 'Original sample'}).json()['details']['accent_notes'] == 'Original sample'

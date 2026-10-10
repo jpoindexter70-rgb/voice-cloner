@@ -670,6 +670,8 @@ def register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle,
                             shutil.copy2(path, target)
                         with closing(sqlite3.connect(database)) as source, closing(store.connect()) as dest:
                             source.backup(dest)
+                        # Backups from earlier releases lack additive profile tables.
+                        Store(store.root)
                         Workspace(store)
                         with jobs_lock:
                             jobs.clear()

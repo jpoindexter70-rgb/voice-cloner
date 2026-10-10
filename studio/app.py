@@ -346,7 +346,7 @@ def create_app(root=None):
                 raise ValueError('Choose a reference with at least 6 seconds of clear speech.')
             chosen = store.settings()
             if engine.missing(chosen['engine']):
-                raise RuntimeError('Selected model is not installed. Run Download Models.cmd, then load the engine.')
+                raise RuntimeError('Selected model is not installed. Use Download or Repair in Local AI Engine Manager, then load the engine.')
             ident = uuid.uuid4().hex
             with jobs_lock:
                 # Bound memory retained for progress/history; assets remain on disk.
@@ -425,11 +425,11 @@ def create_app(root=None):
                 'database': str(store.db), 'preserved_earlier_database': str(store.preserved_database) if store.preserved_database else None,
                 'packages': packages, 'gpu': gpu, 'ffmpeg': ff, 'engine': engine.status(),
                 'privacy': 'Inference is offline. No cloud audio uploads. Bound to loopback by launcher.',
-                'repair': 'Close the studio and run Install or Repair.cmd. This preserves the data directory. Download Models.cmd repairs model files.',
+                'repair': 'Use Local AI Engine Manager to download or repair models. Reinstall the desktop application to repair its bundled runtime. Back up family data in Settings and Diagnostics first.',
                 'memory': memory_status(),
                 'unindexed_recordings': len([p for p in store.audio.glob('*.wav') if p.stem not in {a['id'] for a in store.assets()}]),
                 'missing_recordings': [a['id'] for a in store.assets() if not store.path(a['id']).is_file()],
-                'microphone': 'Browser permission and device test are available in Voice Recorder; cannot be inspected by the server.'}
+                'microphone': 'Microphone permission and a live device test are available in Record Voice.'}
 
     @app.post('/api/shutdown')
     def shutdown():

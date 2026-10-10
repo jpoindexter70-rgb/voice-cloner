@@ -16,7 +16,7 @@ function addScreen(id, title, content) {
   const section = document.createElement('section'); section.className = 'page'; section.id = id; section.hidden = true;
   section.innerHTML = `<div class="page-heading"><h1>${escapeText(title)}</h1></div><article class="card">${content}</article>`;
   document.querySelector('main').append(section);
-  const button = document.createElement('button'); button.dataset.page = id; button.textContent = title; button.setAttribute('aria-label', title);
+  const button = document.createElement('button'); button.dataset.page = id; button.innerHTML = '<span>' + escapeText(title) + '</span>'; button.setAttribute('aria-label', title);
   button.addEventListener('click', protect(async () => { show(id); await refreshExtras(); }));
   $('navigation').append(button);
 }

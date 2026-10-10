@@ -28,13 +28,13 @@ def cpu_threads():
 def verify_manifest(directory, name):
     manifest_file = directory / 'manifest.json'
     if not manifest_file.exists():
-        raise RuntimeError('No verified model manifest. Run Download Models.cmd.')
+        raise RuntimeError('No verified model manifest. Use Download or Repair in Local AI Engine Manager.')
     manifest = json.loads(manifest_file.read_text(encoding='utf-8'))
     if manifest.get('repository') != MODELS[name]['repo']:
-        raise RuntimeError('Model manifest repository mismatch. Run Download Models.cmd.')
+        raise RuntimeError('Model manifest repository mismatch. Use Download or Repair in Local AI Engine Manager.')
     for filename in MODELS[name]['files']:
         if filename not in manifest.get('files', {}):
-            raise RuntimeError('Incomplete model manifest. Run Download Models.cmd.')
+            raise RuntimeError('Incomplete model manifest. Use Download or Repair in Local AI Engine Manager.')
     for filename, details in manifest['files'].items():
         if Path(filename).name != filename:
             raise RuntimeError('Invalid manifest filename.')
@@ -46,7 +46,7 @@ def verify_manifest(directory, name):
             for chunk in iter(lambda: file.read(4 * 1024 * 1024), b''):
                 value.update(chunk)
         if value.hexdigest() != details['sha256']:
-            raise RuntimeError('Model integrity check failed: ' + filename + '. Run Download Models.cmd.')
+            raise RuntimeError('Model integrity check failed: ' + filename + '. Use Download or Repair in Local AI Engine Manager.')
 
 
 def segments(text, limit=240):
@@ -122,16 +122,16 @@ class Engine:
         os.environ.setdefault('NUMBA_CACHE_DIR', str(self.root / '.numba-cache'))
         missing = self.missing(name)
         if missing:
-            raise RuntimeError(f'{name} model files missing: {", ".join(missing)}. Double-click Download Models.cmd while online.')
+            raise RuntimeError(f'{name} model files missing: {", ".join(missing)}. Use Download or Repair in Local AI Engine Manager while online.')
         try:
             import torch
             from chatterbox.tts import ChatterboxTTS
             from chatterbox.tts_turbo import ChatterboxTurboTTS
             import perth
             if perth.PerthImplicitWatermarker is None:
-                raise ImportError('Perth watermarker unavailable; restore the pinned setuptools 78.1.0 with Install or Repair.cmd.')
+                raise ImportError('Perth watermarker unavailable; reinstall the desktop application to restore its bundled runtime.')
         except (ImportError, OSError) as exc:
-            raise RuntimeError('Engine import failed. Run Install or Repair.cmd; see terminal details: ' + str(exc)) from exc
+            raise RuntimeError('Engine import failed. Reinstall the desktop application; see Settings and Diagnostics for details: ' + str(exc)) from exc
         selected = 'cuda' if preference == 'auto' and torch.cuda.is_available() else ('cpu' if preference == 'auto' else preference)
         if selected == 'cuda' and not torch.cuda.is_available():
             raise RuntimeError('CUDA unavailable. Choose CPU or Auto; update the NVIDIA driver and repair the CUDA PyTorch install.')
@@ -159,7 +159,7 @@ class Engine:
         try:
             import torch
         except ImportError as exc:
-            raise RuntimeError('PyTorch is missing. Run Install or Repair.cmd.') from exc
+            raise RuntimeError('PyTorch is missing. Reinstall the desktop application to restore its bundled runtime.') from exc
         self.load(settings['engine'], settings['device'])
         parts = segments(text)
         wavs = []

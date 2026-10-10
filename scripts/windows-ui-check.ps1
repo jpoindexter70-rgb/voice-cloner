@@ -26,6 +26,7 @@ try {
         if ($p.HasExited) { throw "Native application exited: $($p.ExitCode)" }
         $handle = $p.MainWindowHandle
         if ($handle -eq [IntPtr]::Zero) { continue }
+        if ($p.MainWindowTitle -ne 'Family AI Voice Cloner Pro') { throw "Unexpected native window: $($p.MainWindowTitle)" }
         [FamilyWindowCapture]::ShowWindow($handle, 9) | Out-Null
         [FamilyWindowCapture]::SetWindowPos($handle, [IntPtr]::Zero, 10, 10, 1000, 700, 0x0040) | Out-Null
         [FamilyWindowCapture]::SetForegroundWindow($handle) | Out-Null

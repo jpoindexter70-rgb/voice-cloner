@@ -72,6 +72,10 @@ class Batch(BaseModel):
     settings: VoiceSettings | None = None
 
 
+class Comparison(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
 class AudioEdit(BaseModel):
     start: float = Field(default=0, ge=0)
     end: float | None = Field(default=None, gt=0)
@@ -100,6 +104,7 @@ class Preferences(BaseModel):
     noise_suppression: bool = False
     echo_cancellation: bool = False
     selected_profile: str = Field(default='', max_length=36)
+    idle_unload_seconds: int = Field(default=300, ge=0, le=3600)
 
 
 def create_app(root=None, engine=None):
@@ -113,8 +118,16 @@ def create_app(root=None, engine=None):
         persistence.restore(families)
     @asynccontextmanager
     async def lifespan(app):
-        yield
-        jobs.close()
+        stopped=threading.Event()
+        def release_idle_memory():
+            while not stopped.wait(5):
+                try:jobs.unload_if_idle(preferences()['idle_unload_seconds'])
+                except (OSError,ValueError):pass
+        housekeeping=threading.Thread(target=release_idle_memory,name='studio2-memory',daemon=True)
+        housekeeping.start()
+        try:yield
+        finally:
+            stopped.set();housekeeping.join();jobs.close()
     app = FastAPI(title='AI Voice Cloning Studio 2.0', lifespan=lifespan)
     voice_engine = engine or VoiceEngine(Path(os.getenv('STUDIO2_MODEL_DIR', str(root / 'shared-models'))))
     public_origin = os.getenv('STUDIO2_PUBLIC_ORIGIN', '').rstrip('/')
@@ -218,6 +231,8 @@ def create_app(root=None, engine=None):
                        minor=body.minor, authorization=body.authorization, created_at=datetime.now(timezone.utc).isoformat(),
                        consent_status='guardian_verification_pending' if body.minor else 'authorized',
                        settings=VoiceSettings().model_dump(), recordings=[], generated=[], primary_reference=None, picture=False)
+        profile['consent_history'] = [{'event':'created','authorization':body.authorization,
+                                      'date':profile['created_at'],'status':profile['consent_status']}]
         write(path, profile)
         return profile
 
@@ -239,8 +254,11 @@ def create_app(root=None, engine=None):
             for identity_job, job in list(jobs.jobs.items()):
                 if job['profile'] == identity:
                     jobs.cancel(identity_job)
+            previous_status = profile['consent_status']
             profile['consent_status'] = 'revoked'
             profile['revoked_at'] = datetime.now(timezone.utc).isoformat()
+            profile.setdefault('consent_history', []).append({'event':'revoked','previous_status':previous_status,
+                                                             'authorization':profile['authorization'],'date':profile['revoked_at']})
             write(folder(identity), profile)
             if not jobs.active():voice_engine.unload()
         return profile
@@ -253,7 +271,9 @@ def create_app(root=None, engine=None):
                 raise HTTPException(403, 'Child voices require verified guardian authorization and remain locked.')
             if not body.consent or not body.authorization.strip():
                 raise HTTPException(400, 'New documented adult permission is required.')
-            person.setdefault('consent_history', []).append({'previous_status':person['consent_status'],'authorization':body.authorization,'date':datetime.now(timezone.utc).isoformat()})
+            person.setdefault('consent_history', []).append({'event':'reauthorized','previous_status':person['consent_status'],
+                                                            'previous_authorization':person['authorization'],
+                                                            'authorization':body.authorization,'date':datetime.now(timezone.utc).isoformat()})
             person['authorization']=body.authorization
             person['consent_status']='authorized'
             write(folder(identity),person)
@@ -277,16 +297,21 @@ def create_app(root=None, engine=None):
     @app.post('/api/profiles/{identity}/picture')
     async def picture(identity: str, file: UploadFile = File(...)):
         payload = await file.read(2_000_001)
-        if len(payload) > 2_000_000 or not payload.startswith(b'\x89PNG\r\n\x1a\n'):
-            raise HTTPException(400, 'Use a PNG picture under 2 MB')
-        from PIL import Image
+        if len(payload) > 2_000_000:
+            raise HTTPException(400, 'Use a PNG, JPEG or WebP picture under 2 MB')
+        from PIL import Image, ImageOps
         try:
             with Image.open(io.BytesIO(payload)) as image:
-                if image.format != 'PNG' or image.width * image.height > 4_000_000:
+                if image.format not in ('PNG','JPEG','WEBP') or image.width * image.height > 4_000_000:
                     raise ValueError()
                 image.verify()
+            with Image.open(io.BytesIO(payload)) as image:
+                avatar = ImageOps.exif_transpose(image).convert('RGBA')
+                avatar.thumbnail((512,512))
+                normalized = io.BytesIO(); avatar.save(normalized, format='PNG')
+                payload = normalized.getvalue()
         except Exception:
-            raise HTTPException(400, 'Choose a valid PNG picture up to 4 megapixels')
+            raise HTTPException(400, 'Choose a valid PNG, JPEG or WebP picture up to 4 megapixels')
         with lock:
             profile = read(identity)
             (folder(identity) / 'settings/avatar.png').write_bytes(payload)
@@ -372,7 +397,7 @@ def create_app(root=None, engine=None):
 
     @app.get('/api/health')
     def health():
-        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running'}
+        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'recovery_warnings':jobs.recovery_warnings}
 
     @app.get('/api/system')
     def system_status():
@@ -424,7 +449,24 @@ def create_app(root=None, engine=None):
     def ready(name):
         state=voice_engine.status()
         if not state['dependencies'] or not state['models'].get(name):
-            raise HTTPException(503, 'The selected engine checkpoints or dependencies are missing. The server administrator must finish model setup.')
+            raise HTTPException(503, 'The selected engine checkpoints or dependencies are missing. Run the separate Studio 2.0 installer to complete engine setup.')
+
+    @app.post('/api/profiles/{identity}/compare')
+    def compare(identity: str, body: Comparison):
+        if not body.text.strip():raise HTTPException(400, 'Enter an audition script.')
+        with lock:
+            settings = configured(identity, None)
+            for engine_name in ('expressive', 'turbo'):ready(engine_name)
+            person = read(identity)
+            reference = next((r for r in person['recordings'] if r['id'] == person['primary_reference']), None)
+            if not reference or reference['quality']['seconds'] <= 5:
+                raise HTTPException(400, 'Comparison needs a clean authorized reference longer than 5 seconds.')
+            if person['language'].strip().lower() not in ('english', 'en'):
+                raise HTTPException(400, 'Both installed synthesis engines currently support English.')
+            if sum(j['status'] in ('queued', 'running') for j in jobs.jobs.values()) > 18:
+                raise HTTPException(409, 'The queue needs two free slots for an engine comparison.')
+            return [jobs.submit(identity, {**settings, 'engine': name}, text=body.text.strip())
+                    for name in ('expressive', 'turbo')]
 
     @app.post('/api/profiles/{identity}/generate')
     def generate(identity: str, body: Speech):
@@ -459,6 +501,22 @@ def create_app(root=None, engine=None):
     def cancel(identity: str):
         try:return jobs.cancel(identity)
         except KeyError:raise HTTPException(404,'Job not found')
+
+    @app.post('/api/jobs/{identity}/retry')
+    def retry_job(identity: str):
+        with lock:
+            previous = jobs.jobs.get(identity)
+            if previous is None:raise HTTPException(404, 'Job not found')
+            if previous['status'] not in ('failed', 'interrupted', 'cancelled'):
+                raise HTTPException(409, 'Only a stopped or failed job can be retried.')
+            if previous['kind'] != 'speech':
+                raise HTTPException(400, 'Record or import the conversion input again; temporary speech inputs are not retained.')
+            configured(previous['profile'], None)
+            ready(previous['settings']['engine'])
+            try:
+                # Settings/script are preserved; use the currently authorized reference, never a deleted asset.
+                return jobs.submit(previous['profile'], previous['settings'], text=previous['text'])
+            except ValueError as exc:raise HTTPException(400, str(exc))
 
     def generated(identity,asset):
         person=read(identity);allowed(person)

@@ -21,11 +21,23 @@ class Jobs:
         self.temporary=self.root/'temporary';self.temporary.mkdir(exist_ok=True)
         self.engine=engine;self.read=read;self.folder=folder;self.write=write;self.allowed=allowed;self.lock=lock
         self.executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='studio2-inference')
-        self.jobs={};self.cancelled=set()
+        self.jobs={};self.cancelled=set();self.recovery_warnings=[]
+        self.last_activity=time.monotonic()
         for path in self.directory.glob('*.json'):
-            job=json.loads(path.read_text())
+            try:
+                job=json.loads(path.read_text())
+                if not isinstance(job,dict) or not {'id','profile','status','settings','kind'}<=job.keys():
+                    raise ValueError('Invalid job record')
+                if str(uuid.UUID(job['id']))+'.json'!=path.name or str(uuid.UUID(job['profile']))!=job['profile']:
+                    raise ValueError('Invalid job identity')
+                if job['status'] not in ('queued','running','interrupted','completed','failed','cancelled') or job['kind'] not in ('speech','conversion'):
+                    raise ValueError('Invalid job status')
+            except (OSError,ValueError,TypeError,AttributeError):
+                self.recovery_warnings.append({'file':path.name,'message':'Damaged job record was preserved and skipped. Profiles and recordings were not changed.'})
+                continue
             if job['status'] in ('queued','running'):
-                job.update(status='interrupted',error='The studio restarted during processing. Original recordings are unchanged; submit again.');path.write_text(json.dumps(job))
+                job.update(status='interrupted',error='The studio restarted during processing. Original recordings are unchanged; retry the script or import conversion input again.')
+                self.save(job)
             self.jobs[job['id']]=job
 
     def save(self,job):
@@ -35,8 +47,16 @@ class Jobs:
     def active(self,profile=None):
         with self.lock:return any(j['status'] in ('queued','running') and (profile is None or j['profile']==profile) for j in self.jobs.values())
 
+    def unload_if_idle(self,seconds):
+        with self.lock:
+            if seconds and not self.active() and getattr(self.engine,'model',None) is not None and time.monotonic()-self.last_activity>=seconds:
+                self.engine.unload()
+                return True
+        return False
+
     def submit(self,profile,settings,text=None,source=None):
         with self.lock:
+            self.last_activity=time.monotonic()
             person=self.read(profile);self.allowed(person)
             if not person['primary_reference']:raise ValueError('Add a clean authorized voice reference first.')
             record=next(r for r in person['recordings'] if r['id']==person['primary_reference'])
@@ -99,6 +119,7 @@ class Jobs:
             for path in (work,source):path.unlink(missing_ok=True)
             # Remove conditioning after revocation or cancellation before another identity uses the engine.
             with self.lock:
+                self.last_activity=time.monotonic()
                 try:revoked=self.read(job['profile'])['consent_status']!='authorized'
                 except Exception:revoked=True
             if revoked or identity in self.cancelled:self.engine.unload()

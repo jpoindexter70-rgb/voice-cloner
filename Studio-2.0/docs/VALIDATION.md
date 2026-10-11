@@ -3,7 +3,7 @@
 Executed in this cloud machine:
 
 - Isolated Python 3.11 environment with pinned CPU torch/torchaudio 2.6.0 and chatterbox-tts 0.1.7. `pip check` passes.
-- 18 backend integration tests pass: separate profile settings/reference history, persistence after app recreation, adult consent/revocation, locked children, actual WAV/MP3 processing, serialized jobs, batch orchestration, cancellation without partial results, failure/retry, non-destructive editing, safe profile deletion, hosted authentication/Origin protection, verified ZIP backup/restore and malformed/tampered backup rejection.
+- 25 backend integration tests pass: separate profile settings/reference history, persistence after app recreation, adult consent/revocation, locked children, actual WAV/MP3 processing, serialized jobs, batch orchestration, cancellation without partial results, failure/retry, non-destructive editing, safe profile deletion, hosted authentication/Origin protection, verified ZIP backup/restore and malformed/tampered backup rejection.
 - Real verified checkpoints loaded; Expressive and Turbo produced actual reference-conditioned speech. Recorded voice conversion ran with the real shared S3 engine. WAV and MP3 outputs were decoded; model unloading completed.
 - Real two-segment synthesis produced 15.56 seconds of audio in 65.8 seconds, using one selected profile reference.
 - Browser tests: synthetic microphone selection/recording, preview, reference save, playback and selection. Browser REAL synthesis, playback advancing, WAV/MP3 downloads, two-script batch, actual recorded conversion, private ZIP backup and fixture deletion pass with no JavaScript errors.
@@ -17,6 +17,16 @@ Additional local-only work:
 - Hardware dashboard measures OS/Python/CPU/RAM/disk and actual CUDA memory when available. Newly generated clips record total processing seconds and audio-duration ratio, explicitly not live latency.
 - New local browser check passed: saved microphone/gain/noise/profile after reload, permission record, original download, preview gating/edit save, hardware/memory and storage categories, with no JavaScript errors. Device input was synthetic, not physical hardware.
 - Local launcher directs runtime caches/temp to the data drive, reuses existing verified weights on repair and reopens a running Studio without starting another inference server.
+
+Further completed workflows:
+
+- Real browser AI checks passed for auditioning unsaved voice settings without changing the profile, Expressive/Turbo comparison with one identical authorized synthetic reference/script, and microphone capture queued into actual recorded conversion. No JavaScript errors; fixture deleted after checks.
+- Real multi-segment generation and a later speech job reused exactly one current voice-conditioning preparation. Switching reference identity, reference contents or expression forces preparation again; unloading clears conditioning. This is reuse of zero-shot inference conditioning, not training or adaptation.
+- Simulated CUDA OOM control test confirms Auto stays on CPU for subsequent segments until explicit unload. Actual NVIDIA hardware OOM behavior is still unverified.
+- Script retries preserve saved script/settings, require current authorization and use the current primary reference. Conversion retries require reimporting input rather than retaining microphone input indefinitely.
+- Damaged job-history records are preserved and skipped; valid profiles/references remain usable and a recovery warning is reported.
+- Idle memory release defaults to five minutes, is configurable or disabled, and refuses to unload during active jobs. No model/recording files are deleted.
+- PNG/JPEG/WebP avatars are decoded, orientation-corrected, reduced to 512 pixels and normalized to PNG without original metadata. Consent history preserves creation, revocation and earlier permission on reauthorization.
 
 Not executed or unavailable:
 

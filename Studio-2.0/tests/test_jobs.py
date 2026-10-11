@@ -165,7 +165,7 @@ def test_invalid_backup_rejected_and_new_adult_consent_documented(tmp_path):
         assert c.app.state.engine.message=='Unloaded'
         r=c.post('/api/profiles/'+p['id']+'/reauthorize',json={'name':p['name'],'consent':True,'authorization':'New documented permission for synthetic tests.'})
         assert r.status_code==200 and r.json()['consent_status']=='authorized'
-        assert len(r.json()['consent_history'])==1
+        assert [entry['event'] for entry in r.json()['consent_history']]==['created','revoked','reauthorized']
         child=c.post('/api/profiles',json={'name':'Child','minor':True,'consent':True,'authorization':'Parent authorization pending verification.'}).json()
         assert c.post('/api/profiles/'+child['id']+'/reauthorize',json={'name':'Child','consent':True,'authorization':'Attempted self approval is insufficient.'}).status_code==403
     finally:c.app.state.jobs.close()

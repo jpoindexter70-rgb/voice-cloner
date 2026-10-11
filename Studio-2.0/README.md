@@ -2,9 +2,11 @@
 
 Independent browser application with a new Family Voice Library and real neural voice engine integration. Existing Voice Control Room files are unchanged.
 
-Implemented: separate family cards, names/avatars, authorization records, language/accent preferences, per-profile engine/settings, microphone capture with selection, pause/resume and live waveform/meter, import/preview/signal checks, original-preserving normalized references and edits, reference selection, serialized speech jobs, long-text segmentation, batch scripts, recorded voice conversion, progress/cancellation/recovery, generated history/playback, waveform seeking, listening ratings, WAV/MP3 export, model unloading, disk dashboard, safe temporary cleanup and private verified backup/restore. Child voices stay locked pending verified guardian authorization. English synthesis is supported; language preferences do not imply an unsupported engine language.
+Implemented: separate family cards, names/avatars, authorization records, language/accent preferences, per-profile engine/settings, microphone capture with selection, pause/resume and live waveform/meter, import/preview/signal checks, original-preserving normalized references and edits, reference selection, serialized speech jobs, long-text segmentation, batch scripts, recorded voice conversion, progress/cancellation/recovery, generated history/playback, waveform seeking, listening ratings, WAV/MP3 export, model unloading with a saved idle policy, hardware/memory readings, disk dashboard, safe temporary cleanup and private verified backup/restore. Child voices stay locked pending verified guardian authorization. English synthesis is supported; language preferences do not imply an unsupported engine language.
 
-Real Expressive/Turbo inference, conversion and browser export checks passed. See [validation](docs/VALIDATION.md) for exact scope. Naturalness and personal similarity are not yet assessed with family speech. Live conversion and verified child-account access remain unavailable.
+Voice settings can be auditioned before saving. Compare Expressive/Turbo with one script and reference; record microphone speech directly into queued conversion. Long scripts reuse current voice conditioning; reference/profile changes reprepare it. Failed or interrupted speech has a Retry Script control.
+
+Real Expressive/Turbo inference, conversion, settings auditions, comparison, cached multi-segment generation and browser export checks passed. See [validation](docs/VALIDATION.md) for exact scope. Naturalness and personal similarity are not yet assessed with family speech. Live conversion and verified child-account access remain unavailable.
 
 ## Use on your Windows computer
 

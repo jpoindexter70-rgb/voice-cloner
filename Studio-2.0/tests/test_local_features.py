@@ -12,7 +12,7 @@ def test_preferences_restart_validation_and_revoked_selection(tmp_path):
         c.get('/'); c.headers['X-Studio-Token']=c.get('/api/session').json()['token']
         p=profile(c)
         settings=dict(microphone='input-1',output='output-2',input_gain=1.8,
-                      noise_suppression=True,echo_cancellation=False,selected_profile=p['id'])
+                      noise_suppression=True,echo_cancellation=False,selected_profile=p['id'],idle_unload_seconds=300)
         assert c.put('/api/preferences',json=settings).json()==settings
         assert c.put('/api/preferences',json={**settings,'input_gain':20}).status_code==422
         assert c.post('/api/profiles/'+p['id']+'/revoke').status_code==200
@@ -78,3 +78,85 @@ def test_reference_pitch_respects_input_rate_and_speed_duration(tmp_path):
     window=samples[sr:sr*2]
     frequency=np.argmax(np.abs(np.fft.rfft(window))) * sr / len(window)
     assert 510<frequency<540
+
+
+def test_engine_comparison_keeps_settings_and_reference_separate(tmp_path):
+    c=open_client(tmp_path,AdapterFixture());a=person(c)
+    before=c.get('/api/profiles').json()[0]['settings']
+    response=c.post(f'/api/profiles/{a["id"]}/compare',json={'text':'An explicit fixture comparison.'})
+    assert response.status_code==200,response.text
+    jobs=response.json();assert len(jobs)==2
+    assert {j['settings']['engine'] for j in jobs}=={'expressive','turbo'}
+    assert all(j['reference']==a['primary_reference'] for j in jobs)
+    for job in jobs:assert wait(c,job)['status']=='completed'
+    assert c.get('/api/profiles').json()[0]['settings']==before
+    assert c.post(f'/api/profiles/{a["id"]}/compare',json={'text':' '}).status_code==400
+    c.post(f'/api/profiles/{a["id"]}/revoke')
+    assert c.post(f'/api/profiles/{a["id"]}/compare',json={'text':'Forbidden.'}).status_code==403
+    c.app.state.jobs.close()
+
+
+def test_retry_requires_authorization_and_preserves_script_settings(tmp_path):
+    class FailingFixture(AdapterFixture):
+        def synthesize(self,*args):
+            if self.message!='retry':raise RuntimeError('Fixture error')
+            return super().synthesize(*args)
+    fixture=FailingFixture();c=open_client(tmp_path,fixture);a=person(c)
+    job=c.post(f'/api/profiles/{a["id"]}/generate',json={'text':'Retry this exact script.','settings':{'speed':1.2}}).json()
+    assert wait(c,job)['status']=='failed'
+    fixture.message='retry'
+    response=c.post('/api/jobs/'+job['id']+'/retry')
+    assert response.status_code==200,response.text
+    retry=response.json();assert retry['text']==job['text'] and retry['settings']==job['settings']
+    assert wait(c,retry)['status']=='completed'
+    assert c.post('/api/jobs/'+retry['id']+'/retry').status_code==409
+    c.post(f'/api/profiles/{a["id"]}/revoke')
+    assert c.post('/api/jobs/'+job['id']+'/retry').status_code==403
+    c.app.state.jobs.close()
+
+
+def test_consent_history_and_normalized_jpeg_avatar(tmp_path):
+    from PIL import Image
+    c=open_client(tmp_path,AdapterFixture());a=person(c)
+    assert a['consent_history'][0]['event']=='created'
+    output=io.BytesIO();Image.new('RGB',(800,500),'navy').save(output,format='JPEG')
+    response=c.post(f'/api/profiles/{a["id"]}/picture',files={'file':('avatar.jpg',output.getvalue(),'image/jpeg')})
+    assert response.status_code==200,response.text
+    result=c.get(f'/api/profiles/{a["id"]}/picture')
+    with Image.open(io.BytesIO(result.content)) as image:
+        assert image.format=='PNG' and max(image.size)==512
+        assert not image.getexif()
+    revoked=c.post(f'/api/profiles/{a["id"]}/revoke').json()
+    assert revoked['consent_history'][-1]['event']=='revoked'
+    body=dict(name=a['name'],authorization='New documented adult permission for this test.',consent=True)
+    renewed=c.post(f'/api/profiles/{a["id"]}/reauthorize',json=body).json()
+    assert renewed['consent_history'][-1]['previous_authorization']==a['authorization']
+    assert renewed['consent_history'][-1]['event']=='reauthorized'
+    c.app.state.jobs.close()
+
+
+def test_damaged_job_history_does_not_block_startup_or_delete_data(tmp_path):
+    directory=tmp_path/'jobs';directory.mkdir()
+    damaged=directory/'damaged.json';damaged.write_text('{incomplete')
+    c=open_client(tmp_path,AdapterFixture());a=person(c)
+    health=c.get('/api/health').json()
+    assert health['status']=='running' and health['recovery_warnings'][0]['file']=='damaged.json'
+    assert damaged.read_text()=='{incomplete'
+    assert c.get('/api/profiles').json()[0]['id']==a['id']
+    job=c.post(f'/api/profiles/{a["id"]}/generate',json={'text':'Valid job with damaged prior history.'}).json()
+    assert wait(c,job)['status']=='completed'
+    c.app.state.jobs.close()
+
+
+def test_idle_memory_release_never_deletes_files_or_interrupts_jobs(tmp_path):
+    fixture=AdapterFixture();fixture.model=object()
+    c=open_client(tmp_path,fixture);a=person(c);worker=c.app.state.jobs
+    worker.last_activity=0
+    assert not worker.unload_if_idle(0)
+    assert worker.unload_if_idle(60)
+    assert fixture.message=='Unloaded'
+    assert (tmp_path/'family-profiles'/a['id']/'references'/a['primary_reference']).exists()
+    fixture.message='Still loaded';worker.jobs['active-fixture']={'status':'running','profile':a['id']}
+    assert not worker.unload_if_idle(60)
+    assert fixture.message=='Still loaded'
+    worker.jobs.clear();worker.close()

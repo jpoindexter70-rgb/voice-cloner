@@ -49,6 +49,11 @@ with TestClient(create_app(root,engine=engine)) as c:
         results.append({'kind':state['kind'],'engine':state['result']['engine'],'seconds':state['result']['seconds'],'elapsed_seconds':state['elapsed_seconds'],'wav_mp3_export':True})
         print('REAL job passed:',results[-1],flush=True)
     response=c.post('/api/profiles/'+identity+'/generate',json={'text':'Welcome to our private family voice studio.'});response.raise_for_status();check_job(response.json())
+    prepared=engine.conditioning_preparations
+    long_text='This studio keeps one authorized reference throughout a longer script. Every segment uses the same voice settings and reference. We listen carefully to pauses and pronunciation, and retain the original recording for future improvements.'
+    response=c.post('/api/profiles/'+identity+'/generate',json={'text':long_text});response.raise_for_status();check_job(response.json())
+    assert engine.conditioning_preparations==prepared, 'Unchanged reference must be reused across segments'
+    print('REAL multi-segment conditioning reuse passed',flush=True)
     response=c.post('/api/profiles/'+identity+'/convert',files={'file':('synthetic-source.wav',payload,'audio/wav')});response.raise_for_status();check_job(response.json())
     if engine.status()['models']['turbo']:
         response=c.post('/api/profiles/'+identity+'/generate',json={'text':'This is the faster voice engine.','settings':{'engine':'turbo','device':'cpu'}});response.raise_for_status();check_job(response.json())

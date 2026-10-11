@@ -23,6 +23,12 @@ OutputDir=..\dist\installer
 OutputBaseFilename=Family-AI-Voice-Cloner-Pro-{#AppVersion}{#RuntimeSuffix}-Setup
 Compression=lzma2/fast
 SolidCompression=yes
+#if RuntimeVariant == "cu124"
+; GitHub limits each release asset to 2 GiB. Keep CUDA data slices below it.
+DiskSpanning=yes
+DiskSliceSize=1900000000
+SlicesPerDisk=1
+#endif
 WizardStyle=modern
 UninstallDisplayIcon={app}\FamilyVoiceCloner.exe
 CloseApplications=yes

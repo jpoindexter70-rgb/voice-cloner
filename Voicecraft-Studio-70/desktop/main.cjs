@@ -1,6 +1,7 @@
 'use strict';
 const {app, BrowserWindow, session, dialog, Menu} = require('electron');
 const path = require('node:path');
+const http = require('node:http');
 const ORIGIN = process.env.VOICECRAFT_DESKTOP_ORIGIN || 'http://127.0.0.1:8791';
 const url = new URL(ORIGIN);
 if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/') throw new Error('Only the local engine is permitted');
@@ -38,7 +39,20 @@ else {
       // Closing ends the engine, so let the user keep unfinished work running.
       if(dialog.showMessageBoxSync(window,{type:'question',title:'Close Voicecraft Studio 70?',message:'Close the app and stop its local AI engine?',detail:'Save or export any work first. A running generation will be interrupted.',buttons:['Keep open','Close app'],defaultId:0,cancelId:0})!==1)event.preventDefault();
     });
-    window.loadURL(ORIGIN);
+    window.loadFile(path.join(__dirname,'startup.html')).then(() => {
+      const connect=()=>{
+        if(window.isDestroyed())return;
+        const request=http.get(ORIGIN+'/',response=>{
+          response.resume();
+          if(window.isDestroyed())return;
+          if(response.statusCode===200){window.loadURL(ORIGIN);return;}
+          setTimeout(connect,250);
+        });
+        request.setTimeout(1000,()=>request.destroy());
+        request.on('error',()=>{if(!window.isDestroyed())setTimeout(connect,250)});
+      };
+      connect();
+    });
   }).catch(error=>{dialog.showErrorBox('Desktop startup failed',String(error));app.exit(1);});
   app.on('window-all-closed',()=>app.quit());
 }

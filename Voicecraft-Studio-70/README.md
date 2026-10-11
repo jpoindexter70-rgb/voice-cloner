@@ -50,7 +50,7 @@ No model weights, virtual environments, private recordings, tokens, or caches ar
 
 ## Versions and rebuilding
 
-Product version: **70.1.1** (display name Voicecraft Studio 70). Windows bundled Python **3.11.9 x64**; cloud test Python **3.11.16**. Electron **44.7.0**. Both Chatterbox integrations use **chatterbox-tts 0.1.7**. Torch/torchaudio **2.6.0**, CPU build `+cpu` tested; installer selects CUDA **12.4** packages when NVIDIA is detected and falls back to CPU if GPU package installation fails. Physical CUDA execution must be tested on the target PC.
+Product version: **70.1.2** (display name Voicecraft Studio 70). Windows bundled Python **3.11.9 x64**; cloud test Python **3.11.16**. Electron **44.7.0**. Both Chatterbox integrations use **chatterbox-tts 0.1.7**. Torch/torchaudio **2.6.0**, CPU build `+cpu` tested; installer selects CUDA **12.4** packages when NVIDIA is detected and falls back to CPU if GPU package installation fails. Physical CUDA execution must be tested on the target PC.
 
 Major pins: FastAPI **0.115.12**, Uvicorn **0.34.2**, SoundFile **0.13.1**, NumPy **1.26.4**, imageio-ffmpeg **0.6.0**, setuptools **78.1.0**, munch **4.0.0**. Full Windows dependency constraints are in `requirements-windows-lock.txt`; renderer uses Node only internally and no npm install is required for normal app use.
 
@@ -73,3 +73,7 @@ The home screen includes the microphone cover, profile counts and voice cards sh
 ## 70.1.1 startup correction
 
 After initial setup, the desktop shortcut starts the Studio directly. Runtime, dependency and model integrity checks run with the diagnostics window hidden. Installation or repair shows progress only when required; startup failures show diagnostics with Retry setup. Closing the Studio still stops its local engine, and reopening reuses existing models and profile data. No browser or command window is required.
+
+## 70.1.2 faster opening
+
+The desktop window opens before starting the local engine process. A brief local opening screen transitions automatically to the workspace when the lightweight server is available. Profiles, recording, import, and scripts can be used while large model checks and Turbo loading continue in the background. A status message shows progress; generation becomes available only after verification and loading succeed. Turbo is preloaded so the first preview does not start from an unloaded engine. Model checks, download verification, local privacy, and all existing controls remain enabled. Closing the desktop stops the owned engine process, including during startup.

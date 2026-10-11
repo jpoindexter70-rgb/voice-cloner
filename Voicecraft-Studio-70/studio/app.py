@@ -156,7 +156,8 @@ def create_app(root=None, engine=None):
         stopped=threading.Event()
         def release_idle_memory():
             while not stopped.wait(5):
-                try:jobs.unload_if_idle(preferences()['idle_unload_seconds'])
+                try:
+                    if app.state.startup.get('ready',False):jobs.unload_if_idle(preferences()['idle_unload_seconds'])
                 except (OSError,ValueError):pass
         housekeeping=threading.Thread(target=release_idle_memory,name='studio2-memory',daemon=True)
         housekeeping.start()
@@ -165,6 +166,8 @@ def create_app(root=None, engine=None):
             stopped.set();housekeeping.join();jobs.close()
     app = FastAPI(title='Voicecraft Studio 70', lifespan=lifespan)
     voice_engine = engine or VoiceEngine(Path(os.getenv('STUDIO2_MODEL_DIR', str(root / 'shared-models'))))
+    app.state.voice_engine=voice_engine
+    app.state.startup={'ready':True,'message':'Voice engine available.'}
     public_origin = os.getenv('STUDIO2_PUBLIC_ORIGIN', '').rstrip('/')
     password = os.getenv('STUDIO2_PASSWORD', '')
     if public_origin and (not public_origin.startswith('https://') or len(password) < 16):
@@ -300,7 +303,7 @@ def create_app(root=None, engine=None):
             profile.setdefault('consent_history', []).append({'event':'revoked','previous_status':previous_status,
                                                              'authorization':profile['authorization'],'date':profile['revoked_at']})
             write(folder(identity), profile)
-            if not jobs.active():voice_engine.unload()
+            if not jobs.active() and app.state.startup.get('ready',False):voice_engine.unload()
         return profile
 
     @app.post('/api/profiles/{identity}/reauthorize')
@@ -331,7 +334,7 @@ def create_app(root=None, engine=None):
                     (jobs.directory / (job_id + '.json')).unlink(missing_ok=True)
                     jobs.jobs.pop(job_id)
                     jobs.cancelled.discard(job_id)
-            if not jobs.active():voice_engine.unload()
+            if not jobs.active() and app.state.startup.get('ready',False):voice_engine.unload()
         return {'deleted': True}
 
     @app.post('/api/profiles/{identity}/picture')
@@ -438,7 +441,7 @@ def create_app(root=None, engine=None):
 
     @app.get('/api/health')
     def health():
-        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'70.1.1', 'build':'voicecraft-studio-70', 'recovery_warnings':jobs.recovery_warnings}
+        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'70.1.2', 'build':'voicecraft-studio-70', 'recovery_warnings':jobs.recovery_warnings}
 
     @app.get('/api/system')
     def system_status():
@@ -464,9 +467,14 @@ def create_app(root=None, engine=None):
             temporary.replace(path)
         return body.model_dump()
 
+    @app.get('/api/startup')
+    def startup_status():return app.state.startup.copy()
+
     @app.get('/api/engine')
     def engine_status():
         result=voice_engine.status()
+        result['startup']=app.state.startup.copy()
+        if not app.state.startup.get('ready',False):return result
         try:
             import torch
             result['cuda']=torch.cuda.is_available()
@@ -479,6 +487,7 @@ def create_app(root=None, engine=None):
 
     @app.post('/api/engine/unload')
     def unload_engine():
+        if not app.state.startup.get('ready',False):raise HTTPException(409,'Wait for voice engine startup to finish.')
         with lock:
             require_idle();voice_engine.unload()
             return voice_engine.status()
@@ -488,6 +497,7 @@ def create_app(root=None, engine=None):
         return (settings or VoiceSettings(**person['settings'])).model_dump()
 
     def ready(name):
+        if not app.state.startup.get('ready',False):raise HTTPException(503,app.state.startup['message'])
         if installation['status']=='running':raise HTTPException(409,'Wait for model installation to finish.')
         state=voice_engine.status()
         installed=state.get('conversion_engines',{}).get('seed') if name=='seed' else state['models'].get(name)
@@ -717,6 +727,7 @@ def create_app(root=None, engine=None):
 
     @app.post('/api/engine/setup/{name}')
     def install_engine(name: str):
+        if not app.state.startup.get('ready',False) and not app.state.startup.get('failed',False):raise HTTPException(409,'Wait for voice engine startup to finish.')
         if name not in ('turbo','expressive'):raise HTTPException(404,'Unknown engine')
         with lock:
             require_idle();voice_engine.unload()
@@ -727,6 +738,7 @@ def create_app(root=None, engine=None):
                 try:verify(voice_engine.root,name)
                 except (OSError,ValueError,KeyError,RuntimeError):download(voice_engine.root,name)
                 installation.update(status='completed',message=name+' model files verified and ready.')
+                if app.state.startup.get('failed',False):app.state.startup={'ready':True,'message':'Model repair complete. Engine loads on generation.'}
             except Exception as exc:installation.update(status='failed',message=str(exc))
         threading.Thread(target=install,name='voicecraft-model-install',daemon=True).start()
         return dict(installation)

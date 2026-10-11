@@ -1,10 +1,10 @@
 # Voicecraft Studio 70 validation
 
-Release 70.1.1; validation performed October 11, 2026. The older VoiceCraft Studio 1.0.0 source remains unchanged; its previous download is retained at its original commit. The Chatterbox engine adapter is byte-identical to VoiceCraft Studio 1.0.0.
+Release 70.1.2; validation performed October 11, 2026. The older VoiceCraft Studio 1.0.0 source remains unchanged; its previous download is retained at its original commit. The Chatterbox engine adapter is byte-identical to VoiceCraft Studio 1.0.0.
 
 ## Verified in this environment
 
-- **48 backend tests passed**, with two upstream deprecation warnings. These include existing 37 audio/profile/consent/jobs/security/model tests, six desktop-runtime/lifecycle cases, and five tone-control/persistence cases.
+- **51 backend tests passed**, with two upstream deprecation warnings. These include existing 37 audio/profile/consent/jobs/security/model tests, nine desktop-runtime/lifecycle and startup-gate cases, and five tone-control/persistence cases.
 - Desktop runtime first installation verifies the official Electron 44.7.0 Windows archive SHA-256 and ZIP integrity. Installed runtime files are checked on later launches; corrupted runtime files trigger repair. Wrong-hash downloads are rejected before execution. A missing first-start destination folder discovered in Windows validation was fixed and retested.
 - Lifecycle tests verify loopback port 8791, no external-browser launch, and engine shutdown both when the desktop window exits normally and when the window process fails.
 - A real **Electron 44.7.0 Linux window** executed the retained interface against the real local engine: synthetic microphone capture, script choices, recording adjustments/preview/reset, import and original preservation, per-profile volume/style settings, all ten Turbo presets using actual downloaded checkpoints, playback, generated-audio editing, full narration, native export integration, history deletion, persistence after reload, and narrow-layout checks. No frontend errors occurred.
@@ -65,3 +65,14 @@ Expanded-control desktop results passed with real Turbo and Original checkpoints
 - Installer remains per-user and preserves existing profile data and downloaded models. No Chatterbox adapter, audio controls, or preview cancellation behavior was changed.
 
 The 70.1.1 regression run repeated the real Electron desktop workflow with synthetic audio: all ten Turbo styles, microphone capture, import/edit previews, playback, native MP3 export, full narration, history deletion, reload persistence, external navigation blocking, and close confirmation. It passed. Native Ctrl+V with multiline Unicode and the right-click Paste menu passed again. Automated backend/runtime suite: 48 passed, two upstream deprecation warnings.
+
+## 70.1.2 fast opening
+
+- The desktop window starts before the owned local-engine process. A local opening page automatically transitions to the workspace when the loopback server responds. No external browser or console is launched.
+- A real Electron test deliberately delayed engine launch by three seconds. The desktop window appeared in **241 ms** in the Linux test environment; the workspace then opened while real model checks/loading continued. The test created a profile, entered a script and imported a synthetic reference during startup, waited for Turbo readiness, then generated a real **2.8-second** audio preview. Generation controls were disabled until ready, then enabled automatically. This timing excludes Windows bundled-Python/renderer verification and is not a promise for the target PC.
+- Existing installed Windows renderer preparation, including full SHA-256 verification, took **1.281 seconds under Wine**. Verification remains enabled, including model verification before use.
+- Automated tests exercise desktop-before-engine process ordering, window-close cleanup, failed engine-process cleanup, server-before-model-check ordering, model installation when missing, Turbo preloading, failed-load status, and API generation/install/unload gates while profiles remain available. **51 tests passed** with two upstream warnings.
+- Turbo is preloaded without a family reference. The idle timer starts again after loading; consent and per-profile reference selection still apply to every generation. Deleting/revoking a profile during startup cannot unload a model while it is loading. The Chatterbox engine adapter remains unchanged.
+- Physical Windows desktop timing, microphone hardware and GPU execution remain unverified in this environment.
+
+The final 70.1.2 desktop regression run passed all ten real Turbo styles, synthetic microphone capture, recording import and adjustment previews, original preservation, playback, generated-audio editing, full narration, MP3 export, history deletion, reload persistence, navigation restrictions and close confirmation. The Windows launcher visibility/reopening/repair/retry integration fixtures also passed again under Wine.

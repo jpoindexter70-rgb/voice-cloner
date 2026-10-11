@@ -1,7 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if exist ".venv-ai\Scripts\python.exe" goto start_studio
+if not exist ".venv-ai\Scripts\python.exe" goto prepare_studio
+".venv-ai\Scripts\python.exe" scripts\check_installation.py
+if not errorlevel 1 goto start_studio
+:prepare_studio
 echo Preparing your separate local Studio 2.0 installation.
 py -3.11 scripts\bootstrap.py
 if errorlevel 1 goto failed

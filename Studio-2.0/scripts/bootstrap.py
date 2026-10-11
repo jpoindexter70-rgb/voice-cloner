@@ -33,6 +33,9 @@ def main():
         if check.returncode:
             run([str(python),'-m','studio.models','download','--root',str(data/'shared-models'),'--engine',engine],env)
         else:print('Reusing verified '+engine+' model; no download needed.',flush=True)
+    check=subprocess.run([str(python),'-m','studio.seed_assets','verify','--root',str(data/'shared-models')],env=env,capture_output=True)
+    if check.returncode:run([str(python),'-m','studio.seed_assets','download','--root',str(data/'shared-models')],env)
+    else:print('Reusing verified Seed conversion models; no download needed.',flush=True)
     print('[4/4] Full local engine installation complete. Start Studio 2.0.cmd opens the browser.',flush=True)
 
 

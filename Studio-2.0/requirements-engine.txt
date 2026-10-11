@@ -3,3 +3,5 @@ chatterbox-tts==0.1.7
 setuptools==78.1.0
 imageio-ffmpeg==0.6.0
 Pillow==12.3.0
+
+munch==4.0.0

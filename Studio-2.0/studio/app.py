@@ -60,6 +60,9 @@ class VoiceSettings(BaseModel):
     similarity: float = Field(default=.5, ge=0, le=1)
     temperature: float = Field(default=.8, ge=.1, le=1.5)
     pause: float = Field(default=.2, ge=0, le=2)
+    conversion_engine: str = Field(default='expressive',pattern='^(expressive|seed)$')
+    seed_steps: int = Field(default=4,ge=1,le=25)
+    seed_cfg: float = Field(default=.7,ge=0,le=1)
 
 
 class Speech(BaseModel):
@@ -75,6 +78,12 @@ class Batch(BaseModel):
 class Comparison(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
+
+class AdaptationRequest(BaseModel):
+    steps: int = Field(default=100,ge=1,le=500)
+
+class BenchmarkRequest(BaseModel):
+    block_seconds: float = Field(default=.5)
 
 class AudioEdit(BaseModel):
     start: float = Field(default=0, ge=0)
@@ -150,7 +159,9 @@ def create_app(root=None, engine=None):
         return path
 
     def read(identity):
-        return json.loads((folder(identity) / 'settings/profile.json').read_text())
+        person=json.loads((folder(identity) / 'settings/profile.json').read_text())
+        person['settings']=VoiceSettings(**person['settings']).model_dump()
+        return person
 
     def write(path, data):
         target = path / 'settings/profile.json'
@@ -397,7 +408,7 @@ def create_app(root=None, engine=None):
 
     @app.get('/api/health')
     def health():
-        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'recovery_warnings':jobs.recovery_warnings}
+        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'2.1.0', 'build':'family-seed-2026.10.11', 'recovery_warnings':jobs.recovery_warnings}
 
     @app.get('/api/system')
     def system_status():
@@ -448,7 +459,8 @@ def create_app(root=None, engine=None):
 
     def ready(name):
         state=voice_engine.status()
-        if not state['dependencies'] or not state['models'].get(name):
+        installed=state.get('conversion_engines',{}).get('seed') if name=='seed' else state['models'].get(name)
+        if not state['dependencies'] or not installed:
             raise HTTPException(503, 'The selected engine checkpoints or dependencies are missing. Run the separate Studio 2.0 installer to complete engine setup.')
 
     @app.post('/api/profiles/{identity}/compare')
@@ -487,7 +499,7 @@ def create_app(root=None, engine=None):
 
     @app.post('/api/profiles/{identity}/convert')
     async def convert(identity: str, file: UploadFile = File(...)):
-        settings=configured(identity,None);ready('expressive')
+        settings=configured(identity,None);ready(settings['conversion_engine'])
         payload=await file.read(25_000_001);(values,sample_rate),quality=analyze(payload)
         if quality['seconds']>30:raise HTTPException(400,'Convert at most 30 seconds per recording on this version.')
         try:return jobs.submit(identity,settings,source=audio_tools.wav_bytes(values.mean(axis=1),sample_rate))
@@ -667,6 +679,67 @@ def create_app(root=None, engine=None):
                 categories[part] = categories.get(part, 0) + path.stat().st_size
         return {'path': str(root), 'used_bytes': sum(categories.values()), 'categories': categories,
                 'free_bytes': usage.free, 'engine': voice_engine.status(), 'guardian_verification': 'Not implemented; child voices remain locked', 'durable_backup': persistence.repository if persistence else None}
+
+    from .live import register_live
+    register_live(app,jobs,voice_engine,read,allowed,token,public_origin)
+
+    def candidate(identity,version):
+        person=read(identity);allowed(person)
+        if not any(item['id']==version for item in person.get('adaptations',[])):
+            raise HTTPException(404,'Adaptation does not belong to this profile')
+        return person,folder(identity)/'voice-models'/(str(uuid.UUID(version))+'.safetensors')
+
+    @app.post('/api/profiles/{identity}/adaptations')
+    def adapt_profile(identity: str,body: AdaptationRequest):
+        with lock:
+            require_idle();settings=configured(identity,None);ready('seed')
+            try:return jobs.submit(identity,settings,kind='adaptation',steps=body.steps)
+            except ValueError as exc:raise HTTPException(400,str(exc))
+
+    @app.post('/api/profiles/{identity}/adaptations/{version}/audition')
+    def audition_adaptation(identity: str,version: str):
+        with lock:
+            person,path=candidate(identity,version);settings=configured(identity,None);ready('seed')
+            settings['conversion_engine']='seed'
+            if not person['primary_reference']:raise HTTPException(400,'Add a reference before auditioning')
+            values,sample_rate=sf.read(folder(identity)/'references'/person['primary_reference'],dtype='float32',always_2d=True)
+            source=audio_tools.wav_bytes(values[:sample_rate*30].mean(axis=1),sample_rate)
+            return jobs.submit(identity,settings,source=source,adaptation=version)
+
+    @app.post('/api/profiles/{identity}/adaptations/{version}/activate')
+    def activate_adaptation(identity: str,version: str):
+        with lock:
+            require_idle();person,path=candidate(identity,version)
+            if not any(item.get('adaptation')==version and item.get('rating') for item in person['generated']):
+                raise HTTPException(409,'Audition and rate this candidate before activating it')
+            from .models import sha256
+            metadata=json.loads(path.with_suffix('.json').read_text())
+            if sha256(path)!=metadata['sha256']:raise HTTPException(400,'Checkpoint integrity failed')
+            person['active_adaptation']=version;person['settings']['conversion_engine']='seed'
+            write(folder(identity),person);return person
+
+    @app.post('/api/profiles/{identity}/adaptations/deactivate')
+    def deactivate_adaptation(identity: str):
+        with lock:
+            require_idle();person=read(identity);allowed(person);person['active_adaptation']=None
+            write(folder(identity),person);return person
+
+    @app.delete('/api/profiles/{identity}/adaptations/{version}')
+    def delete_adaptation(identity: str,version: str):
+        with lock:
+            require_idle();person,path=candidate(identity,version)
+            if person.get('active_adaptation')==version:person['active_adaptation']=None
+            person['adaptations']=[item for item in person['adaptations'] if item['id']!=version]
+            path.unlink(missing_ok=True);path.with_suffix('.json').unlink(missing_ok=True)
+            write(folder(identity),person);return person
+
+    @app.post('/api/profiles/{identity}/live/benchmark')
+    def benchmark_live(identity: str,body: BenchmarkRequest):
+        if body.block_seconds not in (.25,.5,1):raise HTTPException(400,'Choose a 0.25, 0.5 or 1 second block')
+        with lock:
+            require_idle();settings=configured(identity,None);ready('seed')
+            try:return jobs.submit(identity,settings,kind='benchmark',block=body.block_seconds)
+            except ValueError as exc:raise HTTPException(400,str(exc))
 
     app.mount('/static', StaticFiles(directory=static), name='static')
     return app

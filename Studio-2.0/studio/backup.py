@@ -61,6 +61,15 @@ def restore(payload,families):
                         file=profile/group/(rid+'.wav' if group=='generated-audio' else rid)
                         if not file.exists():raise ValueError('Backup is missing indexed audio')
                 if data.get('primary_reference') is not None and data['primary_reference'] not in [r['id'] for r in data['recordings']]:raise ValueError('Invalid primary reference')
+                versions=set()
+                for item in data.get('adaptations',[]):
+                    version=item['id']
+                    if str(uuid.UUID(version))!=version or version in versions:raise ValueError('Invalid adaptation identifier')
+                    versions.add(version)
+                    checkpoint=profile/'voice-models'/(version+'.safetensors')
+                    metadata=json.loads(checkpoint.with_suffix('.json').read_text())
+                    if hashlib.sha256(checkpoint.read_bytes()).hexdigest()!=metadata['sha256'] or item['sha256']!=metadata['sha256']:raise ValueError('Adaptation checkpoint checksum failed')
+                if data.get('active_adaptation') and data['active_adaptation'] not in versions:raise ValueError('Invalid active adaptation')
                 if data.get('minor'):data['consent_status']='guardian_verification_pending'
                 if data.get('consent_status') not in ('authorized','revoked','guardian_verification_pending'):raise ValueError('Invalid consent status')
                 settings.write_text(json.dumps(data,indent=2))

@@ -16,3 +16,6 @@ fi
 .venv-ai/bin/python -m pytest -q
 .venv-ai/bin/python -m studio.models download --root "$PWD/.runtime/shared-models" --engine all
 .venv-ai/bin/python -m studio.models verify --root "$PWD/.runtime/shared-models" --engine all
+
+.venv-ai/bin/python -m studio.seed_assets download --root "$PWD/.runtime/shared-models"
+.venv-ai/bin/python -m studio.seed_assets verify --root "$PWD/.runtime/shared-models"

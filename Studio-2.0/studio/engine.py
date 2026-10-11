@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 import numpy as np
 from .models import verify, SPECS
+from .seed_assets import installed as seed_installed
 
 
 def split_text(text,limit=220):
@@ -36,10 +37,11 @@ class VoiceEngine:
         available=importlib.util.find_spec('chatterbox') is not None
         installed={name:all((self.root/name/file).exists() for file in spec['files']) and (self.root/name/'manifest.json').exists() for name,spec in SPECS.items()}
         return {'dependencies':available,'models':installed,'loaded':self.name,'device':self.device,'message':self.message,
-                'languages':['English'],'live_conversion':False,'load_seconds':self.load_seconds,
+                'languages':['English'],'live_conversion':{'implemented':True,'engine':'seed','requires':'A fresh passing profile CUDA benchmark'},'load_seconds':self.load_seconds,
                 'conditioning_cached':self._reference_key is not None,
                 'conditioning_preparations':self.conditioning_preparations,
-                'cpu_fallback_engines':sorted(self._cpu_fallback)}
+                'cpu_fallback_engines':sorted(self._cpu_fallback),
+                'conversion_engines':{'expressive':installed['expressive'],'seed':seed_installed(self.root)}}
 
     def unload(self,reset_fallback=True):
         self.model=None;self.name=None;self.device=None;gc.collect()
@@ -55,21 +57,22 @@ class VoiceEngine:
         import torch
         import perth
         if perth.PerthImplicitWatermarker is None:raise RuntimeError('Watermark runtime unavailable; repair engine dependencies.')
-        if name not in SPECS:raise RuntimeError('Unknown voice engine')
+        if name not in SPECS and name!='seed':raise RuntimeError('Unknown voice engine')
         chosen='cuda' if device=='auto' and torch.cuda.is_available() else 'cpu' if device=='auto' else device
         if device=='auto' and name in self._cpu_fallback:chosen='cpu'
         if chosen=='cuda' and not torch.cuda.is_available():raise RuntimeError('CUDA is unavailable; choose Auto or CPU.')
         if self.name==name and self.device==chosen and self.model is not None:return
         self.unload(reset_fallback=False);self.message='Verifying and loading '+name+' on '+chosen
         started=time.monotonic()
-        path=verify(self.root,name)
+        path=self.root if name=='seed' else verify(self.root,name)
         # from_local only reads verified checkpoint directories. Keep the separate private-backup client online.
         os.environ['TRANSFORMERS_OFFLINE']='1'
         os.environ.setdefault('NUMBA_CACHE_DIR',str(self.root.parent/'numba-cache'))
         torch.set_num_threads(max(1,min(4,os.cpu_count() or 1)))
         from chatterbox.tts import ChatterboxTTS
         from chatterbox.tts_turbo import ChatterboxTurboTTS
-        klass=ChatterboxTTS if name=='expressive' else ChatterboxTurboTTS
+        from .seed import SeedEngine
+        klass=SeedEngine if name=='seed' else ChatterboxTTS if name=='expressive' else ChatterboxTurboTTS
         try:self.model=klass.from_local(path,chosen)
         except torch.cuda.OutOfMemoryError:
             if device!='auto':raise
@@ -110,6 +113,13 @@ class VoiceEngine:
 
     def convert(self,source,reference,settings):
         import torch
+        if settings.get('conversion_engine')=='seed':
+            self.load('seed',settings['device'])
+            try:return self.model.convert(source,reference,settings,settings.get('_adapter'))
+            except torch.cuda.OutOfMemoryError:
+                if settings['device']!='auto':raise
+                self.unload(reset_fallback=False);self._cpu_fallback.add('seed');self.load('seed','cpu')
+                return self.model.convert(source,reference,settings,settings.get('_adapter'))
         from chatterbox.vc import ChatterboxVC
         # Conversion uses Original's shared S3 generator, not another profile model.
         self.load('expressive',settings['device'])

@@ -1,6 +1,6 @@
 # Studio 2.0 requirement audit — local computer edition
 
-This checklist groups the uploaded specification and Family Voice Library request into 42 review items. The number is a review grouping, not a claim that a separately supplied list of 42 items was received. All code is in this independent app; the existing applications are unchanged. The browser is the interface to the local Python inference server. No hosting account or deployment token is required for local use.
+This checklist groups the uploaded specification and Family Voice Library request into 46 review items. The number is a review grouping, not a claim that a separately supplied numbered list of 46 items was received. All code is in this independent app; the existing applications are unchanged. The browser is the interface to the local Python inference server. No hosting account or deployment token is required for local use.
 
 “Implemented” means source exists and the relevant Linux/backend/browser workflow was checked; physical Windows, microphone/output hardware and RTX 2060 checks remain distinct. Synthetic references establish inference, not personal speaker similarity.
 
@@ -19,7 +19,7 @@ This checklist groups the uploaded specification and Family Voice Library reques
 | 11 | Profile selection cards and authorized dropdown | Implemented; selection saved across reload/restart |
 | 12 | Per-profile settings and references | Implemented; job snapshots avoid identity/settings changes during processing |
 | 13 | Multiple recording sessions and retained originals | Implemented; original download is byte-preserving |
-| 14 | Additional voice adaptation/retraining | Installed engines use zero-shot references; retraining is NOT supported |
+| 14 | Additional voice adaptation/retraining | Experimental Seed final-head adaptation implemented and real CPU training/inference checked; candidate audition/rating required, no quality guarantee |
 | 15 | Microphone selection | Implemented; synthetic device browser check; physical device unverified |
 | 16 | Record, pause, resume, stop and preview | Implemented; browser checked, direct recorded microphone conversion |
 | 17 | Microphone gain, waveform and responsive input meter | Implemented; software gain/clipping; browser checked |
@@ -44,9 +44,13 @@ This checklist groups the uploaded specification and Family Voice Library reques
 | 36 | GPU acceleration, CPU fallback and model unloading | Implemented; configurable idle unload, sticky Auto CPU fallback unit-checked; actual CUDA/OOM behavior unverified |
 | 37 | Hardware, RAM and GPU-memory dashboard | Real local measurements; unavailable values shown explicitly; hardware refresh |
 | 38 | Recorded-job processing time and audio-duration ratio | Measured and saved on new clips; not claimed as microphone streaming latency |
-| 39 | Real-time microphone conversion | NOT implemented; actual cloud CPU conversion slower than real time; user's GPU unmeasured |
-| 40 | OBS / virtual audio routing | Recorded playback can select an already installed virtual output when browser permits; no virtual driver installation or live conversion |
+| 39 | Real-time microphone conversion | Seed streaming implemented; fresh CUDA throughput benchmark required; physical GPU streaming remains unverified |
+| 40 | OBS / virtual audio routing | Recorded playback can select an already installed virtual output when browser permits; live output uses AudioContext.setSinkId when supported; no virtual driver installation |
 | 41 | D: models, recordings, caches/temp; storage dashboard and safe cleanup | Windows D: default; runtime temp/cache directed there; category dashboard; existing weights reused; missing D: requires explicit override |
 | 42 | Reliable local launch, backup/restore and complete validation | Single launcher plus read-only diagnostics, verified ZIP backup/restore; backend/browser checked; actual Windows launch and RTX 2060 memory fit remain unverified |
+| 43 | Per-profile adaptation checkpoints without base-model duplication | Implemented; real two-step training and adapted conversion passed, ~715 KB candidate |
+| 44 | Audition/rating gate and activation rollback | Implemented; rated preview required; deactivate/delete preserves base weights and recordings |
+| 45 | Bounded browser live transport and hardware readiness | AudioWorklet/WebSocket/playback protocol fixture checked; actual CPU benchmark blocks live; CUDA hardware remains unverified |
+| 46 | Installation repair and visible build identification | One-click dependency/model readiness check, wsproto included, updated dashboard with build label and real library totals |
 
-No controls pretend to implement child identity verification, unsupported languages, retraining or live conversion. The original specification explicitly makes real-time support contingent on feasibility. These limits cannot be resolved by relabeling recorded conversion as live conversion.
+Child identity verification and unsupported synthesis languages remain unavailable. Seed adaptation is an experimental final-head method, not upstream full fine-tuning. Live readiness is measured per profile/settings/device. The original specification explicitly makes real-time support contingent on feasibility. These limits cannot be resolved by relabeling recorded conversion as live conversion.

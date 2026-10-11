@@ -18,9 +18,9 @@ def sha256(path):
     return value.hexdigest()
 
 
-def download(root, name):
-    spec=SPECS[name]; root=Path(root); target=root/name; target.mkdir(parents=True,exist_ok=True)
-    with urllib.request.urlopen('https://huggingface.co/api/models/'+spec['repository']+'?blobs=true',timeout=30) as response:
+def download(root, name, spec=None):
+    spec=spec or SPECS[name]; root=Path(root); target=root/name; target.mkdir(parents=True,exist_ok=True)
+    with urllib.request.urlopen('https://huggingface.co/api/models/'+spec['repository']+('/revision/'+spec['revision'] if spec.get('revision') else '')+'?blobs=true',timeout=30) as response:
         meta=json.load(response)
     manifest={'repository':spec['repository'],'revision':meta['sha'],'files':{}}
     upstream={f['rfilename']:f for f in meta['siblings']}
@@ -48,11 +48,13 @@ def download(root, name):
     return manifest
 
 
-def verify(root,name):
+def verify(root,name,spec=None):
+    spec=spec or SPECS[name]
     path=Path(root)/name
     manifest=json.loads((path/'manifest.json').read_text())
-    if manifest['repository']!=SPECS[name]['repository']:raise RuntimeError('Wrong checkpoint repository')
-    for filename in SPECS[name]['files']:
+    if spec.get('revision') and manifest['revision']!=spec['revision']:raise RuntimeError('Wrong checkpoint revision')
+    if manifest['repository']!=spec['repository']:raise RuntimeError('Wrong checkpoint repository')
+    for filename in spec['files']:
         expected=manifest['files'][filename]; actual=path/filename
         if actual.stat().st_size!=expected['size'] or sha256(actual)!=expected['sha256']:raise RuntimeError('Checkpoint integrity failed: '+filename)
     return path

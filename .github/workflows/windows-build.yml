@@ -89,18 +89,15 @@ jobs:
           if ($previousReport.runtime.torch_cuda -ne $expectedCuda) { throw 'Verified application runtime does not match the requested variant' }
           $previousInstaller = (Get-ChildItem previous -Recurse -Filter '*Setup.exe').FullName
           $previousDir = Join-Path $env:RUNNER_TEMP 'verified-family-app'
-          $p = Start-Process $previousInstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$previousDir`"" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw 'Prior verified installer failed' }
+          & ./scripts/windows-process-check.ps1 -Exe $previousInstaller -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$previousDir`"")
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item $previousDir dist/FamilyVoiceCloner -Recurse
           Remove-Item dist/FamilyVoiceCloner/unins* -Force
-          $p = Start-Process "$previousDir/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw 'Prior installer cleanup failed' }
+          & ./scripts/windows-process-check.ps1 -Exe "$previousDir/unins000.exe" -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 300
       - name: Validate frozen runtime and audio
         shell: pwsh
         run: |
-          $p = Start-Process dist/FamilyVoiceCloner/FamilyVoiceCloner.exe -ArgumentList '--self-test', 'frozen-report.json' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw 'Frozen self-test failed' }
+          & ./scripts/windows-process-check.ps1 -Exe dist/FamilyVoiceCloner/FamilyVoiceCloner.exe -Arguments @('--self-test', 'frozen-report.json') -TimeoutSeconds 300
           if (!(Test-Path frozen-report.json)) { throw 'Missing current frozen report' }
           Get-Content frozen-report.json
       - name: Package genuine Windows installer
@@ -108,29 +105,50 @@ jobs:
         run: |
           & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DRuntimeVariant=$env:TORCH_VARIANT" packaging/windows-installer.iss
           if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
-      - name: Install exact artifact, launch native window, test update and uninstall preservation
+      - name: Install exact artifact and verify installer runtime check
         shell: pwsh
         run: |
           $installer = (Get-ChildItem dist/installer/*Setup.exe).FullName
-          $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=installer-test.log' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw 'Installer failed' }
+          & ./scripts/windows-process-check.ps1 -Exe $installer -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=installer-test.log')
           if (!(Select-String -Path installer-test.log -SimpleMatch 'Installed Python/backend/reference upload/WAV/MP3 verification passed.')) { throw 'Installer did not verify its bundled runtime' }
           $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
           if (!(Test-Path $exe)) { throw 'Installed app is missing' }
-          $p = Start-Process $exe -ArgumentList '--self-test', 'installed-report.json' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or !(Test-Path installed-report.json)) { throw 'Installed runtime failed' }
-          $p = Start-Process $exe -ArgumentList '--smoke-test', 'desktop-report.json' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or !(Test-Path desktop-report.json)) { throw 'Native window test failed' }
+      - name: Validate installed backend, Recovery and audio
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--self-test', 'installed-report.json') -TimeoutSeconds 300
+          if (!(Test-Path installed-report.json)) { throw 'Installed runtime report is missing' }
+      - name: Validate installed native embedded UI
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--smoke-test', 'desktop-report.json') -TimeoutSeconds 180
+          if (!(Test-Path desktop-report.json)) { throw 'Native window report is missing' }
+      - name: Capture actual Windows interface pixels
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
           & ./scripts/windows-ui-check.ps1 -Exe $exe -Report visual-report.json -Screenshot desktop-report.png
-          $p = Start-Process $exe -ArgumentList '--model-test', 'neural-report.json' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or !(Test-Path neural-report.json)) { throw 'Installed real model test failed' }
+      - name: Validate installed real models and eight-sentence story
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--model-test', 'neural-report.json') -TimeoutSeconds 1800
+          if (!(Test-Path neural-report.json)) { throw 'Installed real model report is missing' }
+      - name: Verify repair preserves user data
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem dist/installer/*Setup.exe).FullName
           New-Item -ItemType Directory -Force $env:VCR_DATA_DIR | Out-Null
           Set-Content "$env:VCR_DATA_DIR\preserve-me.txt" 'recordings must survive'
-          $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw 'Repair/update failed' }
+          & ./scripts/windows-process-check.ps1 -Exe $installer -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=repair-test.log')
           if (!(Test-Path "$env:VCR_DATA_DIR\preserve-me.txt")) { throw 'Update removed user data' }
-          $p = Start-Process "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw 'Uninstall failed' }
+      - name: Verify uninstall preserves user data
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\unins000.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 300
           if (!(Test-Path "$env:VCR_DATA_DIR\preserve-me.txt")) { throw 'Uninstall removed user data' }
       - name: Source archive and checksums
         shell: pwsh
@@ -150,9 +168,11 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          if (Test-Path test-data/logs/desktop.log) {
-            $message = (Get-Content test-data/logs/desktop.log -Tail 35) -join '%0A'
-            Write-Output "::error title=Packaged startup diagnostics::$message"
+          foreach ($path in @('installer-test.log', 'repair-test.log', 'test-data/logs/desktop.log', 'test-data/logs/runtime.log')) {
+            if (Test-Path $path) {
+              $message = ((Get-Content $path -Tail 35) -join '%0A') -replace '(https?://[^ ?]+)\?[^ \r\n]+', '$1?[redacted]'
+              Write-Output "::error title=Packaged diagnostics ($path)::$message"
+            }
           }
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -190,13 +210,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
           $installer = (Get-ChildItem candidate -Recurse -Filter '*Setup.exe').FullName
           $env:PATH = "$env:SYSTEMROOT\System32;$env:SYSTEMROOT"
-          $p = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw 'Install failed' }
+          & ./scripts/windows-process-check.ps1 -Exe $installer -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
           $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
-          $p = Start-Process $exe -ArgumentList '--self-test', 'isolated-runtime-report.json' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or !(Test-Path isolated-runtime-report.json)) { throw 'Bundled runtime needs external tools' }
-          $p = Start-Process $exe -ArgumentList '--smoke-test', 'isolated-desktop-report.json' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or !(Test-Path isolated-desktop-report.json)) { throw 'Native window failed with isolated PATH' }
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--self-test', 'isolated-runtime-report.json') -TimeoutSeconds 300
+          if (!(Test-Path isolated-runtime-report.json)) { throw 'Bundled runtime report missing' }
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--smoke-test', 'isolated-desktop-report.json') -TimeoutSeconds 180
+          if (!(Test-Path isolated-desktop-report.json)) { throw 'Native window report missing with isolated PATH' }
           & ./scripts/windows-ui-check.ps1 -Exe $exe -Report isolated-visual-report.json -Screenshot isolated-desktop-report.png
           Get-Content isolated-runtime-report.json
           Get-Content isolated-desktop-report.json

@@ -208,6 +208,9 @@ class Engine:
             key = (str(Path(reference).resolve()), stat.st_mtime_ns, stat.st_size, id(self.model), self.loaded, self.device,
                    controls.exaggeration if settings['engine'] == 'chatterbox' else 0)
             cached = self.reference_cache_key == key
+            if not cached:
+                # Preparing a different reference can mutate model conditionals before failing.
+                self.reference_cache_key = None
             kwargs = {'audio_prompt_path': None if cached else str(reference), 'temperature': controls.temperature}
             if settings['engine'] == 'chatterbox':
                 kwargs.update(exaggeration=controls.exaggeration, cfg_weight=controls.cfg_weight)

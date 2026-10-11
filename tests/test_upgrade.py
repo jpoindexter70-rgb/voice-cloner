@@ -170,3 +170,33 @@ def test_reference_cache_changes_on_file_and_speaker(tmp_path,monkeypatch):
     generate(a);generate(a);a.write_bytes(b'changed');generate(a);generate(b)
     assert calls==[str(a),None,str(a),str(b)]
     assert e.last_generation['reference_cache_hits']==1
+
+
+def test_failed_reference_switch_does_not_reuse_wrong_speaker(tmp_path,monkeypatch):
+    import torch
+    import pytest
+    from studio.engine import Engine
+    from studio.app import GenerationIn
+    e=Engine(tmp_path)
+    class Model:
+        sr=24000
+        reference=None
+        fail=False
+        def generate(self,text,**kwargs):
+            if kwargs['audio_prompt_path']:
+                self.reference=kwargs['audio_prompt_path']
+            if self.fail:
+                self.fail=False
+                raise RuntimeError('Failed after conditioning changed')
+            return torch.ones((1,24000))*.1
+    e.model=Model();e.loaded='turbo';e.device='cpu'
+    monkeypatch.setattr(e,'load',lambda *args:None)
+    a=tmp_path/'a.wav';b=tmp_path/'b.wav';a.write_bytes(b'a');b.write_bytes(b'b')
+    controls=GenerationIn(text='Hello.')
+    def generate(path):
+        return e.generate('Hello.',path,{'engine':'turbo','device':'cpu'},controls,lambda *args:None,lambda:False)
+    generate(a);e.model.fail=True
+    with pytest.raises(RuntimeError,match='conditioning changed'):
+        generate(b)
+    generate(a)
+    assert e.model.reference==str(a)

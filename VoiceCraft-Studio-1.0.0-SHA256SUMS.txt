@@ -1,0 +1,2 @@
+7948040bb30f478901d26b88baa935a45c0c0d1cdf520de47f3ba723ea70d1a7  VoiceCraft-Studio-1.0.0-Setup.exe
+2dde2ee75af81e0036d970cd923a9a6b14d770d4ee42968cd8041f7c6c4c8e11  VoiceCraft-Studio-1.0.0-SOURCE.zip

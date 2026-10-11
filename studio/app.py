@@ -70,6 +70,7 @@ class EditIn(BaseModel):
     pitch: float = Field(default=0, ge=-6, le=6)
     volume: float = Field(default=1, ge=0, le=2)
     normalize: bool = False
+    level: bool = False
 
 
 class ReviewIn(BaseModel):
@@ -236,7 +237,17 @@ def create_app(root=None):
             store.delete_profile(ident)
             with engine.lock:
                 engine.unload()
-        return {'deleted': True, 'notice': 'Active local recordings deleted. Separately remove any exported files and backups.'}
+        return {'deleted': True, 'notice': 'Profile moved to Recovery. Exported files and backups are separate.'}
+
+    @app.get('/api/recovery')
+    def recovery_items():
+        return store.recycle_items()
+
+    @app.post('/api/recovery/{ident}/restore')
+    def restore_deleted(ident: str):
+        with mutation_lock:
+            idle()
+            return store.restore_deleted(ident)
 
     @app.get('/api/assets')
     def assets(profile_id: str | None = None):
@@ -437,6 +448,25 @@ def create_app(root=None):
         store.review(ident, body.model_dump())
         return {'saved': True}
 
+    @app.post('/api/assets/{ident}/similarity')
+    def similarity(ident: str):
+        asset = store.asset(ident)
+        if asset['kind'] != 'generated' or not asset['metadata'].get('reference_id'):
+            raise ValueError('Choose generated speech with an available reference recording.')
+        reference = store.asset(asset['metadata']['reference_id'])
+        if reference['profile_id'] != asset['profile_id']:
+            raise ValueError('Reference does not belong to this speaker.')
+        with mutation_lock:
+            idle()
+            with engine.lock:
+                engine.load(asset['metadata']['engine'], store.settings()['device'])
+                return engine.compare_speakers(store.path(reference['id']), store.path(ident))
+
+    @app.get('/api/capabilities')
+    def model_capabilities():
+        from .capabilities import capabilities
+        return capabilities(store.settings()['engine'])
+
     @app.get('/api/reviews')
     def reviews():
         return store.reviews()
@@ -458,6 +488,25 @@ def create_app(root=None):
                     gpu.update(name=torch.cuda.get_device_name(0), vram_gb=round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2))
             except Exception as exc:
                 gpu['message'] = str(exc)
+        gpu['physical_devices'] = []
+        smi = shutil.which('nvidia-smi')
+        if not smi and os.name == 'nt':
+            candidate = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32' / 'nvidia-smi.exe'
+            if candidate.is_file():
+                smi = str(candidate)
+        if smi:
+            try:
+                result = subprocess.run([smi, '--query-gpu=name,memory.total,driver_version', '--format=csv,noheader,nounits'],
+                    capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    gpu['physical_devices'] = result.stdout.strip().splitlines()[:8]
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if not gpu.get('available'):
+            gpu['recommendation'] = ('NVIDIA GPU detected, but this PyTorch runtime cannot use CUDA. Use the CUDA installer and a compatible driver; Auto retains CPU fallback.'
+                if gpu['physical_devices'] else 'GPU acceleration unavailable in this runtime. Auto uses CPU.')
+        else:
+            gpu['recommendation'] = 'CUDA available. Run one model at a time; actual generation and memory fit require a hardware test.'
         try:
             ff = audio.ffmpeg()
         except Exception as exc:
@@ -538,6 +587,7 @@ def create_app(root=None):
             idle()
             with engine.lock:
                 engine.unload()
+                engine.auto_cpu_fallback = False
                 engine.message = 'Engine stopped. Recordings and models remain saved.'
         return engine.status()
 

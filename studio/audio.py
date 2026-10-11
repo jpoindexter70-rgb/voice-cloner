@@ -61,7 +61,20 @@ def waveform(path, points=800):
     return {'peaks': [float(np.max(np.abs(g))) for g in groups], 'seconds': len(x) / sr}
 
 
-def edit(source, target, start, end, remove_silence, denoise, speed, pitch, volume=1, normalize=False):
+def level_volume(source, target):
+    """EBU R128 loudness normalization with bounded dynamic leveling, via FFmpeg."""
+    proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-i', str(source),
+        '-af', 'loudnorm=I=-18:TP=-1.5:LRA=7', '-ar', '24000', '-ac', '1',
+        '-c:a', 'pcm_s16le', str(target)], capture_output=True, timeout=120)
+    if proc.returncode:
+        raise ValueError('Volume leveling failed: ' + proc.stderr.decode(errors='replace')[-500:])
+    x, sr = sf.read(target, dtype='float32')
+    if not len(x) or not np.isfinite(x).all():
+        raise ValueError('Volume leveling returned invalid audio.')
+    return analyze(x, sr)
+
+
+def edit(source, target, start, end, remove_silence, denoise, speed, pitch, volume=1, normalize=False, level=False):
     x, sr = sf.read(source, dtype='float32')
     duration = len(x) / sr
     end = duration if end is None else end
@@ -107,6 +120,14 @@ def edit(source, target, start, end, remove_silence, denoise, speed, pitch, volu
         finally:
             temp.unlink(missing_ok=True)
     x, sr = sf.read(target, dtype='float32')
+    if level:
+        leveled = target.with_name(uuid.uuid4().hex + '.wav')
+        try:
+            level_volume(target, leveled)
+            leveled.replace(target)
+            x, sr = sf.read(target, dtype='float32')
+        finally:
+            leveled.unlink(missing_ok=True)
     if normalize:
         peak = np.max(np.abs(x))
         if peak > 0:

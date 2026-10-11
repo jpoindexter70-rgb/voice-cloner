@@ -1,3 +1,25 @@
+# Current upgrade acceptance status
+
+The 0.4.0 source changes below are undergoing Windows packaging acceptance. The published 0.3.0 installer remains the previous version; do not infer that these changes are installed on an existing computer. All 46 original requirement numbers are retained in the historical matrix below.
+
+The specification explicitly permits truthful unsupported-capability reporting for features 13–17 and 36. A dedicated similarity control, accent transfer and whisper synthesis are unavailable in the pinned Chatterbox APIs; this update does not pretend otherwise. Named delivery presets use real audio processing and supported Original exaggeration, rather than native categorical emotion conditioning.
+
+Upgrade changes:
+
+- 7: visible Short preview buttons in both synthesis screens; actual first-sentence generation and playback are being validated in a real browser.
+- 8: original/edited players in the editor, mutually exclusive playback, plus a genuine local speaker-encoder cosine comparison for generated/reference clips. Self-comparison scored 1.0 and an AI-reference/generated pair scored 0.91123 on the real Turbo encoder. This is an uncalibrated metric, not a percentage or certification of human similarity.
+- 10, 13: cheerful, excited, sad and serious delivery presets supplement the original four presets. Actual pace, pitch, pauses and supported exaggeration are saved independently by profile; emotional realism is not guaranteed.
+- 26: optional EBU R128 loudness leveling supplements existing peak normalization. Real FFmpeg tests prove finite output, preserved duration, bounded peaks, reduced loud/quiet imbalance and silence handling.
+- 29: expanded real-model acceptance generates eight independent sentences across two chapters with two assigned AI-reference speakers, then checks replacement, exports, captions and reopening. This does not certify long-duration narrative coherence or human voice identity.
+- 36: Fast explicitly uses the Turbo model and Final explicitly uses Original. Both are real engines, both require their own downloaded model, and Final is not guaranteed to sound better. The short preview remains a shorter real render.
+- 40, 41: deleted profiles/recordings move to Recovery; restoration preserves audio, primary references, consent, settings, reviews and pictures. Backups include recovery audio. Earlier backup layouts migrate additive tables. Legacy databases with extra columns use named-column restoration. No automatic permanent erasure is performed.
+- 44–46: optional CUDA 12.4 Windows packaging uses pinned CUDA PyTorch/torchaudio instead of the CPU wheel. Diagnostics distinguish physical NVIDIA devices from actual runtime CUDA readiness. Auto retains CPU fallback after an out-of-memory event until engine restart, avoiding repeated failed GPU loads. Physical RTX 2060 generation/6 GB fit remains unrun.
+- Performance: the engine reuses prepared reference conditioning for unchanged successive speaker segments; changing the file, speaker, model, device or Original exaggeration invalidates it. Real generation reports include measured elapsed time/device and cache hits. No unmeasured speed-up is promised.
+
+The current full Linux suite passed 60 backend tests. The real Chromium preview acceptance passed both visible buttons, first-sentence-only neural generation, decoded in-app audio playback and the speaker comparison UI, with no JavaScript errors. The eight-sentence/two-chapter actual Turbo story passed all acceptance steps using AI-generated references. Linux backend and actual UI/neural acceptance, Windows artifact tests and CUDA hardware acceptance are separate. Signing still requires a legitimate certificate; no signing credential has been established. The user's report that physical recording and in-app playback now work is useful consumer evidence, but does not certify the untested GPU or every failure case.
+
+---
+
 # Family AI Voice Cloner Pro — 46-feature verification
 
 This is an implementation/verification report, not certification of a final Windows release. Linux Python 3.11 backend tests, real Chromium workflows, and a real offscreen Qt desktop window were executed. Physical Windows microphones, RTX 2060 memory/acceleration, personal family voice similarity and clean consumer-PC installation are unrun.

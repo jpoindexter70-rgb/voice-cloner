@@ -5,6 +5,12 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      acceleration:
+        description: 'Bundled runtime: CPU or CUDA 12.4 (hardware acceptance remains separate)'
+        required: false
+        default: cpu
+        type: choice
+        options: [cpu, cu124]
       verified_build_run:
         description: 'Publish artifacts from a completed successful installer build; empty builds normally'
         required: false
@@ -16,7 +22,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: windows-desktop-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: windows-desktop-${{ github.event.pull_request.head.ref || github.ref_name }}-${{ inputs.acceleration || 'cpu' }}
   cancel-in-progress: true
 jobs:
   build-and-install:
@@ -30,6 +36,7 @@ jobs:
       VCR_DATA_DIR: '${{ github.workspace }}\test-data'
       HF_HOME: '${{ github.workspace }}\hf-cache'
       NUMBA_CACHE_DIR: '${{ github.workspace }}\numba-cache'
+      TORCH_VARIANT: "${{ inputs.acceleration || 'cpu' }}"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,7 +50,8 @@ jobs:
       - name: Install pinned runtime and test dependencies
         if: inputs.repackage_run == ''
         run: |
-          python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          if ($env:TORCH_VARIANT -notin @('cpu','cu124')) { throw 'Unsupported runtime variant' }
+          python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url "https://download.pytorch.org/whl/$env:TORCH_VARIANT"
           python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
           python -m pip check
       - name: Run Windows backend regressions
@@ -66,6 +74,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           REPACKAGE_RUN: ${{ inputs.repackage_run }}
         run: |
+          if ($env:TORCH_VARIANT -ne 'cpu') { throw 'CUDA variants require a fresh build' }
           if ($env:REPACKAGE_RUN -notmatch '^[0-9]+$') { throw 'Invalid reuse run' }
           $run = gh run view $env:REPACKAGE_RUN --json conclusion,status,workflowName,headSha | ConvertFrom-Json
           if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.workflowName -ne 'Windows desktop installer') { throw 'Reuse build is not verified' }
@@ -94,7 +103,7 @@ jobs:
       - name: Package genuine Windows installer
         shell: pwsh
         run: |
-          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' packaging/windows-installer.iss
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DRuntimeVariant=$env:TORCH_VARIANT" packaging/windows-installer.iss
           if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
       - name: Install exact artifact, launch native window, test update and uninstall preservation
         shell: pwsh
@@ -124,7 +133,7 @@ jobs:
         shell: pwsh
         run: |
           git archive --format=zip --output=dist/installer/Family-AI-Voice-Cloner-Pro-Source.zip HEAD
-          Get-ChildItem dist/installer/* | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-String | Set-Content dist/installer/SHA256SUMS.txt
+          Get-ChildItem dist/installer/* | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } | Set-Content dist/installer/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -240,20 +249,25 @@ jobs:
           test -n "$neural_report"
           jq -e '.models | length == 2 and all(.real_neural_synthesis == true and .reference_conditioning == true and .wav_mp3_decode == true)' "$neural_report"
           jq -e '.story | .real_neural_story and .independent_reference_routing and .sentence_regeneration and .short_preview and .wav_mp3_decode and .captions and .history_and_reopen' "$neural_report"
+          jq -e '.story | .story_sentences == 8 and .story_chapters == 2 and .reference_recovery == true and (.speaker_encoder_comparison.cosine >= -1 and .speaker_encoder_comparison.cosine <= 1)' "$neural_report"
           installer=$(find candidate -name '*Setup.exe' -print -quit)
           source_zip=$(find candidate -name '*Source.zip' -print -quit)
           test -n "$installer"
           test -n "$source_zip"
-          tag="desktop-preview-${revision:0:12}"
+          variant=$(jq -r '.runtime.torch_cuda // "cpu"' "$neural_report")
+          suffix=""
+          if [[ "$variant" != "cpu" ]]; then suffix="-cuda"; fi
+          tag="desktop-preview-${revision:0:12}${suffix}"
           cat > notes.md <<'NOTES'
           Python Windows desktop preview with bundled runtime, local Chatterbox Original/Turbo, family profiles, recording/editing, per-person controls, story/project workflows, timeline, persistent queue and WAV/MP3 export.
 
           This exact installer passed Windows backend regressions, frozen and installed runtime checks, native window launch, genuine Original/Turbo CPU speech generation with AI-generated test references, update and uninstall data-preservation checks on a hosted Windows runner. A separate installed-app check also passed with a system-only search path, without Python or FFmpeg on PATH.
 
-          The installed application also generated a real two-speaker story, a short preview and a replacement sentence, preserving the other clip and earlier audio. Story WAV/MP3 decoding, timed captions, history and reopening passed. This version adds local profile pictures/details, selectable guided recording scripts, countdown cancellation, microphone-disconnect recovery and queue shutdown cleanup.
+          The installed application also generated a real two-speaker story, a short preview and a replacement sentence, preserving the other clip and earlier audio. Story WAV/MP3 decoding, timed captions, history and reopening passed. This version adds recoverable recordings/profiles, EBU volume leveling, visible short previews, delivery presets, local speaker-encoder comparisons and separate real Turbo/Original generation modes.
 
-          Preview limitations: unsigned CPU build; a clean consumer Windows PC, physical microphone, RTX 2060/CUDA and personal family-voice similarity are not certified. The complete 46-feature master specification is not fully accepted; see docs/FEATURE-VERIFICATION.md in the matching source ZIP. Models are downloaded separately after confirmation in the app. Use only recordings you have permission to clone.
+          Preview limitations: unsigned build; a clean consumer Windows PC, physical microphone, RTX 2060/CUDA and personal family-voice similarity are not certified. The complete 46-feature master specification is not fully accepted; see docs/FEATURE-VERIFICATION.md in the matching source ZIP. Models are downloaded separately after confirmation in the app. Use only recordings you have permission to clone.
           NOTES
+          printf '\nBundled PyTorch CUDA runtime: `%s` (cpu means CPU-only). GPU hardware testing is unrun.\n' "$variant" >> notes.md
           printf '\nVerified build: https://github.com/%s/actions/runs/%s\nSource revision: `%s`\n' "$GH_REPO" "$BUILD_RUN" "$revision" >> notes.md
           if ! gh release view "$tag" --json isDraft > draft.json; then
             gh release create "$tag" --target "$revision" --title 'Family AI Voice Cloner Pro — Windows desktop preview' --notes-file notes.md --draft --prerelease

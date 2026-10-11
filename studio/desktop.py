@@ -88,9 +88,15 @@ def self_test(destination):
                 response = client.get(f'/api/assets/{ident}/export/{fmt}')
                 response.raise_for_status()
                 assert len(response.content) > 1000
+            client.delete('/api/assets/'+ident).raise_for_status()
+            assert client.get('/api/recovery').json()[0]['kind']=='asset'
+            client.post('/api/recovery/'+ident+'/restore').raise_for_status()
+            leveled=client.post('/api/assets/'+ident+'/edit',json={'level':True})
+            leveled.raise_for_status()
+            assert leveled.json()['metadata']['seconds']>9.9
             assert client.get('/api/health').json()['application'] == 'voice-control-room-advanced'
-    report = {'packaged_backend': True, 'engine_imports_watermarker': True,
-              'fixture_upload_wav_mp3': True, 'real_synthesis': 'unrun', 'physical_microphone': 'unrun'}
+    report = {'frozen_runtime': bool(getattr(sys, 'frozen', False)), 'packaged_backend': True, 'engine_imports_watermarker': True,
+              'fixture_upload_wav_mp3': True, 'recovery': True, 'volume_leveling': True, 'real_synthesis': 'unrun', 'physical_microphone': 'unrun'}
     Path(destination).write_text(json.dumps(report, indent=2), encoding='utf-8')
 
 
@@ -145,7 +151,7 @@ def model_test(destination):
     from .acceptance import story_acceptance
     story = story_acceptance(outputs / 'story-workflow', root / 'models',
                              [outputs / (name + '-AI-generated-reference.wav') for name in MODELS])
-    Path(destination).write_text(json.dumps({'models': results, 'story': story, 'outputs': str(outputs)}, indent=2), encoding='utf-8')
+    Path(destination).write_text(json.dumps({'models': results, 'story': story, 'runtime': {'torch_version': torch.__version__, 'torch_cuda': torch.version.cuda, 'physical_gpu_test': 'unrun'}, 'outputs': str(outputs)}, indent=2), encoding='utf-8')
 
 
 def main():

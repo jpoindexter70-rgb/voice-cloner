@@ -16,6 +16,7 @@ import soundfile as sf
 from fastapi import HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
+from typing import Literal
 
 from . import audio
 from .engine import segments
@@ -31,6 +32,7 @@ class VoiceControls(BaseModel):
     cfg_weight: float = Field(default=.5, ge=0, le=1)
     temperature: float = Field(default=.8, ge=.1, le=1.2)
     normalize: bool = False
+    level: bool = False
 
 
 PRESETS = {
@@ -38,6 +40,10 @@ PRESETS = {
     'Bedtime Reading': {'speed': .85, 'volume': .85, 'exaggeration': .3, 'pause_ms': 450},
     'Energetic Character': {'speed': 1.1, 'exaggeration': .8, 'pause_ms': 120},
     'Calm Narration': {'speed': .95, 'exaggeration': .3, 'pause_ms': 300},
+    'Cheerful delivery': {'speed': 1.05, 'pitch': 1, 'exaggeration': .65},
+    'Excited delivery': {'speed': 1.12, 'exaggeration': .8, 'pause_ms': 100},
+    'Sad delivery': {'speed': .85, 'pitch': -1, 'exaggeration': .25, 'pause_ms': 400},
+    'Serious delivery': {'speed': .95, 'pitch': -.5, 'exaggeration': .35, 'pause_ms': 250},
 }
 
 
@@ -76,6 +82,7 @@ class QueueIn(BaseModel):
     project_id: str | None = None
     replace_clip: str | None = None
     preview: bool = False
+    render_mode: Literal['current', 'fast', 'final'] = 'current'
 
 
 class Workspace:
@@ -291,6 +298,8 @@ class PersistentQueue:
         if not self.store.path(reference_id).is_file() or reference['metadata']['seconds'] < 6:
             raise ValueError('Choose an available reference with at least six seconds of clear speech.')
         settings = self.store.settings()
+        if body.render_mode != 'current':
+            settings = {**settings, 'engine': 'turbo' if body.render_mode == 'fast' else 'chatterbox'}
         if self.engine.missing(settings['engine']):
             raise ValueError('Selected model is not installed. Download it in Local AI Engine Manager first.')
         if body.project_id:
@@ -371,6 +380,7 @@ class PersistentQueue:
                 self.process(pending)
 
     def process(self, item):
+        started = time.monotonic()
         directory = self.store.root / 'checkpoints' / item['id']
         directory.mkdir(parents=True, exist_ok=True)
         ident = uuid.uuid4().hex
@@ -421,6 +431,14 @@ class PersistentQueue:
                 audio.edit(target, processed, 0, None, False, False, control.speed, control.pitch)
                 processed.replace(target)
             x, sr = sf.read(target, dtype='float32')
+            if control.level:
+                leveled = target.with_suffix('.leveled.wav')
+                try:
+                    audio.level_volume(target, leveled)
+                    leveled.replace(target)
+                    x, sr = sf.read(target, dtype='float32')
+                finally:
+                    leveled.unlink(missing_ok=True)
             if control.normalize:
                 peak = np.max(np.abs(x))
                 if peak > 0:
@@ -429,7 +447,7 @@ class PersistentQueue:
             sf.write(target, x, sr, subtype='PCM_16')
             metadata = {**audio.analyze(x, sr), 'synthetic': True, 'text': item['text'],
                 'reference_id': item['reference_id'], 'engine': item['settings']['engine'],
-                'controls': item['controls'], 'checkpoint_revision': self.engine.revision}
+                'controls': item['controls'], 'checkpoint_revision': self.engine.revision, 'runtime': {**self.engine.last_generation, 'job_elapsed_seconds': round(time.monotonic()-started, 3)}}
             asset = self.store.add_asset(ident, item['profile_id'], 'AI-generated · ' + item['text'][:60], 'generated', metadata)
             item.update(status='complete', asset=asset, cancel=False)
             if item['project_id']:
@@ -583,6 +601,9 @@ def register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle,
                     if not path.is_file():
                         raise ValueError('A recording is missing. Restore it before making a complete backup.')
                     entries['audio/' + path.name] = path
+                for path in store.audio.glob('*.wav'):
+                    if re.fullmatch(r'[a-f0-9]{32}\.wav', path.name):
+                        entries['audio/' + path.name] = path
                 for path in (store.root / 'checkpoints').glob('*/*.wav'):
                     if not path.name.endswith('.partial.wav'):
                         entries[path.relative_to(store.root).as_posix()] = path

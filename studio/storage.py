@@ -84,6 +84,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS reviews (
                 id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS voice_preferences (profile_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS recycle_bin (id TEXT PRIMARY KEY, kind TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS profile_details (
                 profile_id TEXT PRIMARY KEY, data TEXT NOT NULL);
             ''')
@@ -169,22 +171,75 @@ class Store:
         with self.connect() as c:
             c.execute('UPDATE profiles SET primary_asset=? WHERE id=?', (asset_id, profile_id))
 
-    def delete_asset(self, ident):
-        self.asset(ident)
-        self.path(ident).unlink(missing_ok=True)
+    def recycle_items(self):
         with self.connect() as c:
+            return [dict(id=r['id'], kind=r['kind'], name=json.loads(r['data'])['name'], created=r['created'])
+                    for r in c.execute('SELECT * FROM recycle_bin ORDER BY created DESC')]
+
+    def delete_asset(self, ident):
+        asset = self.asset(ident)
+        with self.connect() as c:
+            asset['reviews'] = [dict(r) for r in c.execute('SELECT * FROM reviews WHERE asset_id=?', (ident,))]
+            asset['was_primary'] = c.execute('SELECT primary_asset FROM profiles WHERE id=?', (asset['profile_id'],)).fetchone()[0] == ident
+            c.execute('INSERT INTO recycle_bin VALUES (?,?,?,?)', (ident, 'asset', json.dumps(asset), now()))
             c.execute('DELETE FROM assets WHERE id=?', (ident,))
             c.execute('DELETE FROM reviews WHERE asset_id=?', (ident,))
             c.execute('UPDATE profiles SET primary_asset=NULL WHERE primary_asset=?', (ident,))
+        # Immutable WAV stays in place so project history remains recoverable.
 
     def delete_profile(self, ident):
-        self.profile(ident)
-        for asset in self.assets(ident):
-            self.delete_asset(asset['id'])
+        profile = self.profile(ident)
         with self.connect() as c:
+            preferences = c.execute('SELECT data FROM voice_preferences WHERE profile_id=?', (ident,)).fetchone()
+            profile['preferences'] = preferences['data'] if preferences else None
+            profile['assets'] = []
+            for asset in self.assets(ident):
+                asset['reviews'] = [dict(r) for r in c.execute('SELECT * FROM reviews WHERE asset_id=?', (asset['id'],))]
+                profile['assets'].append(asset)
+            recovery_id = uuid.uuid4().hex
+            c.execute('INSERT INTO recycle_bin VALUES (?,?,?,?)', (recovery_id, 'profile', json.dumps(profile), now()))
+            c.execute('DELETE FROM reviews WHERE asset_id IN (SELECT id FROM assets WHERE profile_id=?)', (ident,))
+            c.execute('DELETE FROM assets WHERE profile_id=?', (ident,))
+            c.execute('DELETE FROM voice_preferences WHERE profile_id=?', (ident,))
+            c.execute('DELETE FROM profile_details WHERE profile_id=?', (ident,))
             if ident != 'my-voice':
                 c.execute('DELETE FROM profiles WHERE id=?', (ident,))
-                c.execute('DELETE FROM profile_details WHERE profile_id=?', (ident,))
+            else:
+                c.execute('UPDATE profiles SET primary_asset=NULL WHERE id=?', (ident,))
+
+    def restore_deleted(self, ident):
+        with self.connect() as c:
+            row = c.execute('SELECT * FROM recycle_bin WHERE id=?', (ident,)).fetchone()
+            if not row:
+                raise ValueError('Recovery item not found.')
+            data = json.loads(row['data'])
+            assets = data['assets'] if row['kind'] == 'profile' else [data]
+            for asset in assets:
+                if not self.path(asset['id']).is_file():
+                    raise ValueError('Recovery audio is missing. Restore a verified backup.')
+                if c.execute('SELECT id FROM assets WHERE id=?', (asset['id'],)).fetchone():
+                    raise ValueError('Recording already exists; recovery preserved without changes.')
+            profile_id = data['id'] if row['kind'] == 'profile' else data['profile_id']
+            existing = c.execute('SELECT * FROM profiles WHERE id=?', (profile_id,)).fetchone()
+            if row['kind'] == 'profile':
+                if existing and (profile_id != 'my-voice' or c.execute('SELECT id FROM assets WHERE profile_id=?', (profile_id,)).fetchone()):
+                    raise ValueError('This profile has new recordings. Back them up before restoring the earlier profile.')
+                c.execute('INSERT OR REPLACE INTO profiles (id,name,kind,authorization,created,primary_asset) VALUES (?,?,?,?,?,?)',
+                          tuple(data[k] for k in ('id','name','kind','authorization','created','primary_asset')))
+                c.execute('INSERT OR REPLACE INTO profile_details VALUES (?,?)', (profile_id, json.dumps(data.get('details', {}))))
+                if data.get('preferences'):
+                    c.execute('INSERT OR REPLACE INTO voice_preferences VALUES (?,?)', (profile_id, data['preferences']))
+            elif not existing:
+                raise ValueError('Restore the deleted family profile before restoring this recording.')
+            for asset in assets:
+                c.execute('INSERT INTO assets (id,profile_id,name,kind,created,metadata) VALUES (?,?,?,?,?,?)',
+                          tuple(asset[k] for k in ('id','profile_id','name','kind','created')) + (json.dumps(asset['metadata']),))
+                for review in asset.get('reviews', []):
+                    c.execute('INSERT INTO reviews (id,asset_id,data,created) VALUES (?,?,?,?)', tuple(review[k] for k in ('id','asset_id','data','created')))
+            if row['kind'] == 'asset' and data.get('was_primary') and not existing['primary_asset']:
+                c.execute('UPDATE profiles SET primary_asset=? WHERE id=?', (data['id'], profile_id))
+            c.execute('DELETE FROM recycle_bin WHERE id=?', (ident,))
+        return {'restored': True, 'profile_id': profile_id}
 
     def settings(self):
         defaults = {'engine': 'chatterbox', 'device': 'auto'}

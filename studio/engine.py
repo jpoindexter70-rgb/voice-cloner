@@ -6,6 +6,7 @@ import importlib.metadata
 import os
 import re
 import threading
+import time
 from pathlib import Path
 
 MODELS = {
@@ -80,6 +81,10 @@ class Engine:
         self.device = None
         self.revision = None
         self.message = 'Model not loaded.'
+        self.reference_cache_key = None
+        self.reference_cache_hits = 0
+        self.auto_cpu_fallback = False
+        self.last_generation = {}
 
     def model_path(self, name):
         return self.root / name
@@ -94,12 +99,14 @@ class Engine:
             version = None
         return {'package_version': version, 'loaded': self.loaded, 'device': self.device,
                 'message': self.message, 'models': {name: {'missing': self.missing(name), 'path': str(self.model_path(name))} for name in MODELS},
-                'busy': self.lock.locked(), 'revision': self.revision}
+                'busy': self.lock.locked(), 'revision': self.revision, 'reference_cache_hits': self.reference_cache_hits, 'auto_cpu_fallback': self.auto_cpu_fallback, 'last_generation': self.last_generation}
 
     def unload(self):
         self.model = None
+        self.reference_cache_key = None
         self.loaded = None
         self.revision = None
+        self.device = None
         gc.collect()
         try:
             import torch
@@ -132,7 +139,7 @@ class Engine:
                 raise ImportError('Perth watermarker unavailable; reinstall the desktop application to restore its bundled runtime.')
         except (ImportError, OSError) as exc:
             raise RuntimeError('Engine import failed. Reinstall the desktop application; see Settings and Diagnostics for details: ' + str(exc)) from exc
-        selected = 'cuda' if preference == 'auto' and torch.cuda.is_available() else ('cpu' if preference == 'auto' else preference)
+        selected = 'cuda' if preference == 'auto' and not self.auto_cpu_fallback and torch.cuda.is_available() else ('cpu' if preference == 'auto' else preference)
         if selected == 'cuda' and not torch.cuda.is_available():
             raise RuntimeError('CUDA unavailable. Choose CPU or Auto; update the NVIDIA driver and repair the CUDA PyTorch install.')
         if self.loaded == name and self.device == selected:
@@ -148,11 +155,40 @@ class Engine:
             self.unload()
             if preference != 'auto':
                 raise RuntimeError('GPU memory exhausted. Close GPU applications or choose CPU / Auto.')
+            self.auto_cpu_fallback = True
             selected = 'cpu'
             self.model = cls.from_local(self.model_path(name), device='cpu')
         self.loaded, self.device = name, selected
         self.revision = json.loads((self.model_path(name) / 'manifest.json').read_text(encoding='utf-8')).get('revision')
-        self.message = f'{name} ready on {selected}. No recordings are uploaded.'
+        self.message = f'{name} ready on {selected}. Reference recordings stay on this computer.'
+
+    def compare_speakers(self, reference, generated):
+        """Use the loaded model's actual speaker encoder, with bounded local audio."""
+        import numpy as np
+        import soundfile as sf
+        import torch
+        from scipy.signal import resample_poly
+        from math import gcd
+        if self.model is None:
+            raise RuntimeError('Load the voice engine before measuring similarity.')
+        waves = []
+        for path in (reference, generated):
+            x, sr = sf.read(path, dtype='float32', frames=30 * sf.info(path).samplerate)
+            if x.ndim != 1 or len(x) < sr or not np.isfinite(x).all() or np.sqrt(np.mean(x ** 2)) < .001:
+                raise ValueError('Similarity comparison needs at least one second of audible mono speech in each recording.')
+            factor = gcd(sr, 16000)
+            waves.append(resample_poly(x, 16000 // factor, sr // factor).astype(np.float32))
+        with torch.inference_mode():
+            embeddings = np.asarray(self.model.ve.embeds_from_wavs(waves, sample_rate=16000))
+        if embeddings.shape[0] != 2 or not np.isfinite(embeddings).all():
+            raise RuntimeError('Speaker encoder returned invalid embeddings.')
+        a, b = embeddings
+        denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if denominator <= 0:
+            raise RuntimeError('Speaker encoder returned an empty embedding.')
+        return {'cosine': round(float(np.clip(np.dot(a, b) / denominator, -1, 1)), 5),
+                'method': 'Chatterbox local speaker encoder', 'engine': self.loaded, 'revision': self.revision,
+                'notice': 'Uncalibrated acoustic comparison, not a similarity percentage or identity verification. Listen to both recordings.'}
 
     def generate(self, text, reference, settings, controls, progress, cancelled):
         import numpy as np
@@ -160,6 +196,7 @@ class Engine:
             import torch
         except ImportError as exc:
             raise RuntimeError('PyTorch is missing. Reinstall the desktop application to restore its bundled runtime.') from exc
+        started = time.monotonic()
         self.load(settings['engine'], settings['device'])
         parts = segments(text)
         wavs = []
@@ -167,7 +204,11 @@ class Engine:
             if cancelled():
                 raise RuntimeError('Generation cancelled. No incomplete recording was saved.')
             progress(idx, len(parts))
-            kwargs = {'audio_prompt_path': str(reference), 'temperature': controls.temperature}
+            stat = Path(reference).stat()
+            key = (str(Path(reference).resolve()), stat.st_mtime_ns, stat.st_size, id(self.model), self.loaded, self.device,
+                   controls.exaggeration if settings['engine'] == 'chatterbox' else 0)
+            cached = self.reference_cache_key == key
+            kwargs = {'audio_prompt_path': None if cached else str(reference), 'temperature': controls.temperature}
             if settings['engine'] == 'chatterbox':
                 kwargs.update(exaggeration=controls.exaggeration, cfg_weight=controls.cfg_weight)
             try:
@@ -176,18 +217,29 @@ class Engine:
             except torch.cuda.OutOfMemoryError:
                 if settings['device'] != 'auto' or self.device != 'cuda':
                     raise RuntimeError('GPU memory exhausted. Choose Auto for CPU fallback, or CPU.')
+                self.auto_cpu_fallback = True
                 self.unload()
                 self.load(settings['engine'], 'cpu')
+                kwargs['audio_prompt_path'] = str(reference)
+                cached = False
+                key = None
                 with torch.inference_mode():
                     wav = self.model.generate(part, **kwargs)
                 self.message += ' GPU ran out of memory; generation continued on CPU.'
             arr = wav.detach().cpu().numpy().reshape(-1)
             if not len(arr) or not np.isfinite(arr).all():
                 raise RuntimeError('Engine returned invalid audio.')
+            self.reference_cache_key = key
+            if cached:
+                self.reference_cache_hits += 1
             wavs.append(arr)
             if idx < len(parts) - 1:
                 wavs.append(np.zeros(int(self.model.sr * controls.pause_ms / 1000), dtype=np.float32))
             progress(idx + 1, len(parts))
         if cancelled():
             raise RuntimeError('Generation cancelled. No recording was saved.')
-        return np.concatenate(wavs), self.model.sr
+        output = np.concatenate(wavs)
+        self.last_generation = {'elapsed_seconds': round(time.monotonic() - started, 3), 'device': self.device,
+                                'audio_seconds': round(len(output) / self.model.sr, 3), 'reference_cache_hits': self.reference_cache_hits,
+                                'auto_cpu_fallback': self.auto_cpu_fallback}
+        return output, self.model.sr

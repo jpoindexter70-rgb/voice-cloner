@@ -73,7 +73,11 @@ def test_profile_isolation_and_restart(client):
     client.delete(f'/api/profiles/{p["id"]}')
     assert len(client.get('/api/assets').json()) == 1
     assert client.get(f'/api/assets/{a["id"]}/audio').status_code == 200
-    assert not client.app.state.store.path(b['id']).exists()
+    assert client.app.state.store.path(b['id']).exists()
+    recovery=client.get('/api/recovery').json()
+    assert len(recovery)==1 and recovery[0]['kind']=='profile'
+    client.post('/api/recovery/'+recovery[0]['id']+'/restore').raise_for_status()
+    assert len(client.get('/api/assets').json())==2
 
 
 def test_real_audio_conversion_waveform_wav_mp3(client,tmp_path):
@@ -232,12 +236,17 @@ def test_engine_segment_conditioning_and_cpu_fallback(tmp_path,monkeypatch):
         engine.loaded=name;engine.device='cuda' if device=='auto' else device;engine.model=fixture
     monkeypatch.setattr(engine,'load',load)
     monkeypatch.setattr(engine,'unload',lambda:None)
+    (tmp_path/'one-speaker.wav').write_bytes(recording())
+    (tmp_path/'another-speaker.wav').write_bytes(recording())
     text='This is a test sentence. '*50
     control=GenerationIn(text=text)
     progress=[]
     wave,sr=engine.generate(text,tmp_path/'one-speaker.wav',{'engine':'chatterbox','device':'auto'},control,lambda a,b:progress.append((a,b)),lambda:False)
     assert engine.device=='cpu' and len(wave)>2400 and sr==24000
-    assert all(c[1]['audio_prompt_path']==str(tmp_path/'one-speaker.wav') for c in calls)
+    assert calls[0][1]['audio_prompt_path']==str(tmp_path/'one-speaker.wav')
+    assert calls[1][1]['audio_prompt_path']==str(tmp_path/'one-speaker.wav')
+    assert any(c[1]['audio_prompt_path'] is None for c in calls[2:])
+    assert engine.reference_cache_hits>0
     assert all(c[1]['exaggeration']==.5 for c in calls)
     assert progress[-1][0]==len(segments(text))
     assert 'GPU ran out of memory' in engine.message

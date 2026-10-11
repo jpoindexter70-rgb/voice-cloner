@@ -1,5 +1,13 @@
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.4.0"
+#endif
+#ifndef RuntimeVariant
+  #define RuntimeVariant "cpu"
+#endif
+#if RuntimeVariant == "cu124"
+  #define RuntimeSuffix "-CUDA"
+#else
+  #define RuntimeSuffix ""
 #endif
 [Setup]
 AppId={{E44B4B82-320A-4D43-A066-460309921068}
@@ -12,7 +20,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist\installer
-OutputBaseFilename=Family-AI-Voice-Cloner-Pro-{#AppVersion}-Setup
+OutputBaseFilename=Family-AI-Voice-Cloner-Pro-{#AppVersion}{#RuntimeSuffix}-Setup
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern

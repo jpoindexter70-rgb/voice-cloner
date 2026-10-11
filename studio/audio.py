@@ -20,7 +20,7 @@ def decode(source, target):
     proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe',
                            '-format_whitelist', 'wav,mp3,flac,ogg,mov,matroska,webm,aac,aiff', '-i', str(source),
                            '-t', str(MAX_SECONDS + 1), '-vn', '-ac', '1', '-ar', '24000',
-                           '-c:a', 'pcm_s16le', str(target)], capture_output=True, timeout=120)
+                           '-c:a', 'pcm_s16le', str(target)], capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if proc.returncode:
         raise ValueError('Cannot decode this recording. Use WAV, MP3, FLAC, OGG, M4A, or browser WebM audio.')
     audio, sr = sf.read(target, dtype='float32')
@@ -63,9 +63,17 @@ def waveform(path, points=800):
 
 def level_volume(source, target):
     """EBU R128 loudness normalization with bounded dynamic leveling, via FFmpeg."""
+    x, sr = sf.read(source, dtype='float32')
+    if not len(x) or not np.isfinite(x).all():
+        raise ValueError('Volume leveling needs valid audio.')
+    if float(np.sqrt(np.mean(x ** 2))) < 1e-8:
+        # Some Windows FFmpeg loudnorm builds turn -infinity loudness into full-scale PCM.
+        # Silence has no measurable loudness to normalize; retain it without the filter.
+        sf.write(target, x, sr, subtype='PCM_16')
+        return analyze(x, sr)
     proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-i', str(source),
         '-af', 'loudnorm=I=-18:TP=-1.5:LRA=7', '-ar', '24000', '-ac', '1',
-        '-c:a', 'pcm_s16le', str(target)], capture_output=True, timeout=120)
+        '-c:a', 'pcm_s16le', str(target)], capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if proc.returncode:
         raise ValueError('Volume leveling failed: ' + proc.stderr.decode(errors='replace')[-500:])
     x, sr = sf.read(target, dtype='float32')
@@ -113,7 +121,7 @@ def edit(source, target, start, end, remove_silence, denoise, speed, pitch, volu
         temp = target.with_name(uuid.uuid4().hex + '.wav')
         try:
             proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-i', str(target),
-                                   '-af', filters, str(temp)], capture_output=True, timeout=120)
+                                   '-af', filters, str(temp)], capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             if proc.returncode:
                 raise ValueError('FFmpeg could not apply pitch/speed processing.')
             temp.replace(target)
@@ -141,6 +149,6 @@ def export_mp3(source, target, synthetic=False):
     proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-i', str(source),
                            '-c:a', 'libmp3lame', '-q:a', '2', '-metadata',
                            'comment=AI-GENERATED SYNTHETIC AUDIO; Voice Control Room' if synthetic else 'comment=Reference recording; Voice Control Room', str(target)],
-                          capture_output=True, timeout=120)
+                          capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if proc.returncode:
         raise ValueError('MP3 export failed. Run diagnostics to check FFmpeg.')

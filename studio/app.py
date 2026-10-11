@@ -497,7 +497,7 @@ def create_app(root=None):
         if smi:
             try:
                 result = subprocess.run([smi, '--query-gpu=name,memory.total,driver_version', '--format=csv,noheader,nounits'],
-                    capture_output=True, text=True, timeout=5)
+                    capture_output=True, text=True, timeout=5, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 if result.returncode == 0:
                     gpu['physical_devices'] = result.stdout.strip().splitlines()[:8]
             except (OSError, subprocess.TimeoutExpired):

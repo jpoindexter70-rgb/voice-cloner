@@ -32,3 +32,12 @@ class PrivateProfileStore:
         paths=[identity+'/references/'+asset,identity+'/original-recordings/'+asset]
         operations=[CommitOperationDelete(path_in_repo=p) for p in paths if p in info]
         if operations:self.api.create_commit(self.repository,repo_type='dataset',operations=operations,commit_message='Remove deleted reference from active storage')
+
+    def delete_generated(self, identity, asset):
+        from huggingface_hub import CommitOperationDelete
+        files = self.api.list_repo_files(self.repository, repo_type='dataset')
+        paths = [identity + '/generated-audio/' + asset + suffix for suffix in ('.wav', '.mp3')]
+        operations = [CommitOperationDelete(path_in_repo=p) for p in paths if p in files]
+        if operations:
+            self.api.create_commit(self.repository, repo_type='dataset', operations=operations,
+                                   commit_message='Remove deleted generated audio from active storage')

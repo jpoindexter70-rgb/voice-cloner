@@ -31,13 +31,17 @@ def wav_bytes(values,sr):
 
 def process(path,target,speed=1,pitch=0,start=0,end=None,denoise=False):
     filters=[]
+    if start or end is not None:
+        trim = f'atrim=start={start}'
+        if end is not None:trim += f':end={end}'
+        filters.extend([trim, 'asetpts=PTS-STARTPTS'])
     if pitch:
         factor=2**(pitch/12)
-        filters.extend([f'asetrate=24000*{factor}', 'aresample=24000',f'atempo={1/factor}'])
+        input_rate = sf.info(path).samplerate
+        filters.extend([f'asetrate={input_rate}*{factor}', 'aresample=24000',f'atempo={1/factor}'])
     if speed!=1:filters.append(f'atempo={speed}')
     if denoise:filters.append('afftdn=nf=-25')
-    command=[ffmpeg(),'-v','error','-nostdin','-y','-i',str(path),'-ss',str(start)]
-    if end is not None:command.extend(['-t',str(end-start)])
+    command=[ffmpeg(),'-v','error','-nostdin','-y','-i',str(path)]
     if filters:command.extend(['-af',','.join(filters)])
     command.extend(['-ac','1','-ar','24000',str(target)])
     result=subprocess.run(command,capture_output=True,timeout=180)

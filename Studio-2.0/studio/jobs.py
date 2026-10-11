@@ -85,6 +85,10 @@ class Jobs:
                 result={'id':identity,'kind':job['kind'],'created_at':now(),'text':job['text'],
                         'reference':job['reference'],'settings':settings,'seconds':round(sf.info(target).duration,2),
                         'engine':self.engine.name,'device':self.engine.device,'rating':None,'ai_generated':True}
+                elapsed = time.monotonic() - started
+                result['processing_seconds'] = round(elapsed, 2)
+                result['realtime_factor'] = round(elapsed / max(sf.info(target).duration, .001), 3)
+                result['latency_scope'] = 'Total recorded-job processing, including loading; not live microphone latency'
                 person['generated'].append(result);self.write(folder,person)
                 job.update(status='completed',progress=100,phase='Ready to play',result=result,elapsed_seconds=round(time.monotonic()-started,1));self.save(job)
         except Exception as exc:

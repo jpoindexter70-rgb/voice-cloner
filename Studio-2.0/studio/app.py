@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from .engine import VoiceEngine
 from .jobs import Jobs
 from . import audio as audio_tools
+from . import system as system_tools
 
 
 def default_root():
@@ -90,6 +91,15 @@ class Settings(VoiceSettings):
     accent: str = Field(max_length=100)
     speed: float = Field(default=1, ge=.5, le=2)
     name: str = Field(min_length=1, max_length=80)
+
+
+class Preferences(BaseModel):
+    microphone: str = Field(default='', max_length=512)
+    output: str = Field(default='', max_length=512)
+    input_gain: float = Field(default=1, ge=.1, le=4)
+    noise_suppression: bool = False
+    echo_cancellation: bool = False
+    selected_profile: str = Field(default='', max_length=36)
 
 
 def create_app(root=None, engine=None):
@@ -364,6 +374,30 @@ def create_app(root=None, engine=None):
     def health():
         return {'application': 'ai-voice-cloning-studio-2', 'status': 'running'}
 
+    @app.get('/api/system')
+    def system_status():
+        model_root = Path(os.getenv('STUDIO2_MODEL_DIR', str(root / 'shared-models')))
+        result = system_tools.report(root, model_root)
+        result['mode'] = 'hosted' if public_origin else 'local'
+        return result
+
+    @app.get('/api/preferences')
+    def preferences():
+        with lock:
+            path = root / 'preferences.json'
+            return Preferences(**json.loads(path.read_text())).model_dump() if path.exists() else Preferences().model_dump()
+
+    @app.put('/api/preferences')
+    def save_preferences(body: Preferences):
+        with lock:
+            if body.selected_profile:
+                allowed(read(body.selected_profile))
+            path = root / 'preferences.json'
+            temporary = path.with_suffix('.tmp')
+            temporary.write_text(body.model_dump_json())
+            temporary.replace(path)
+        return body.model_dump()
+
     @app.get('/api/engine')
     def engine_status():
         result=voice_engine.status()
@@ -435,6 +469,31 @@ def create_app(root=None, engine=None):
     def playback_generated(identity: str,asset: str):
         return FileResponse(generated(identity,asset),media_type='audio/wav')
 
+    @app.delete('/api/profiles/{identity}/generated/{asset}')
+    def delete_generated(identity: str, asset: str):
+        with lock:
+            require_idle(identity)
+            path = generated(identity, asset)
+            person = read(identity)
+            path.unlink(missing_ok=True)
+            path.with_suffix('.mp3').unlink(missing_ok=True)
+            person['generated'] = [item for item in person['generated'] if item['id'] != asset]
+            write(folder(identity), person)
+            if persistence:
+                persistence.delete_generated(identity, asset)
+        return {'deleted': asset}
+
+    @app.get('/api/profiles/{identity}/originals/{asset}')
+    def original_recording(identity: str, asset: str):
+        person = read(identity); allowed(person)
+        record = next((item for item in person['recordings'] if item['id'] == asset), None)
+        if record is None:
+            raise HTTPException(404, 'Recording does not belong to this profile')
+        path = folder(identity) / 'original-recordings' / asset
+        if not path.is_file():
+            raise HTTPException(404, 'This edited reference has no imported original')
+        return FileResponse(path, media_type='application/octet-stream', filename=record['name'])
+
     @app.get('/api/profiles/{identity}/generated/{asset}/export/{format}')
     def export(identity: str,asset: str,format: str):
         if format not in ('wav','mp3'):raise HTTPException(400,'Choose WAV or MP3')
@@ -461,7 +520,8 @@ def create_app(root=None, engine=None):
             source=folder(identity)/'references'/asset
             duration=sf.info(source).duration
             end=body.end if body.end is not None else duration
-            if body.start>=end or end>duration:raise HTTPException(400,'Trim start/end are outside this recording.')
+            if body.start>=end or end>duration+.0051:raise HTTPException(400,'Trim start/end are outside this recording.')
+            end=min(end,duration)
             if (end-body.start)/body.speed<3:raise HTTPException(400,'Keep at least 3 seconds for a voice reference.')
             new_id=str(uuid.uuid4());target=folder(identity)/'references'/new_id
             temporary=folder(identity)/'references'/(new_id+'.wav')
@@ -470,6 +530,28 @@ def create_app(root=None, engine=None):
             person['recordings'].append({'id':new_id,'name':'Edited reference.wav','created_at':datetime.now(timezone.utc).isoformat(),'quality':quality,'original':asset})
             write(folder(identity),person)
             return person
+
+    @app.post('/api/profiles/{identity}/references/{asset}/preview')
+    def preview_edit(identity: str, asset: str, body: AudioEdit):
+        with lock:
+            person = read(identity); allowed(person); require_idle(identity)
+            if asset not in [r['id'] for r in person['recordings']]:
+                raise HTTPException(404, 'Recording does not belong to this profile')
+            source = folder(identity) / 'references' / asset
+            duration = sf.info(source).duration
+            end = body.end if body.end is not None else duration
+            if body.start >= end or end > duration+.0051 or (min(end,duration)-body.start)/body.speed < 3:
+                raise HTTPException(400, 'Choose valid trim boundaries and keep at least 3 seconds.')
+            end=min(end,duration)
+            target = jobs.temporary / ('reference-preview-' + str(uuid.uuid4()) + '.wav')
+            try:
+                audio_tools.process(source, target, start=body.start, end=end, speed=body.speed,
+                                    pitch=body.pitch, denoise=body.denoise)
+                analyze(target.read_bytes())
+            except Exception:
+                target.unlink(missing_ok=True)
+                raise
+        return FileResponse(target, media_type='audio/wav', background=BackgroundTask(target.unlink, missing_ok=True))
 
     @app.delete('/api/profiles/{identity}/references/{asset}')
     def delete_reference(identity: str,asset: str):
@@ -520,7 +602,12 @@ def create_app(root=None, engine=None):
     @app.get('/api/storage')
     def storage():
         usage = shutil.disk_usage(root)
-        return {'path': str(root), 'used_bytes': sum(p.stat().st_size for p in root.rglob('*') if p.is_file()),
+        categories = {}
+        for path in root.rglob('*'):
+            if path.is_file():
+                part = path.relative_to(root).parts[0]
+                categories[part] = categories.get(part, 0) + path.stat().st_size
+        return {'path': str(root), 'used_bytes': sum(categories.values()), 'categories': categories,
                 'free_bytes': usage.free, 'engine': voice_engine.status(), 'guardian_verification': 'Not implemented; child voices remain locked', 'durable_backup': persistence.repository if persistence else None}
 
     app.mount('/static', StaticFiles(directory=static), name='static')

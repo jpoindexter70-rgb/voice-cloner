@@ -15,7 +15,7 @@ def desktop(tmp_path,monkeypatch):
     module.APP=app
     return module,app
 
-def test_renderer_verification_reuse_and_corruption_repair(desktop,tmp_path,monkeypatch):
+def test_renderer_verification_reuse_and_corruption_repair(desktop,tmp_path,monkeypatch,capsys):
     module,app=desktop;archive=tmp_path/'fixture.zip'
     with zipfile.ZipFile(archive,'w') as z:z.writestr('electron.exe',b'fixture executable');z.writestr('chrome.dll',b'fixture runtime')
     digest=hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -23,11 +23,11 @@ def test_renderer_verification_reuse_and_corruption_repair(desktop,tmp_path,monk
     downloads=[]
     def download(url,target):downloads.append(url);Path(target).write_bytes(archive.read_bytes())
     monkeypatch.setattr(module.urllib.request,'urlretrieve',download)
-    exe=module.desktop_runtime();assert exe.read_bytes()==b'fixture executable';assert len(downloads)==1
+    exe=module.desktop_runtime();assert 'VOICECRAFT_SETUP_REQUIRED' in capsys.readouterr().out;assert exe.read_bytes()==b'fixture executable';assert len(downloads)==1
     assert (exe.parent/'resources/app/main.cjs').read_text()=='local desktop source'
-    assert module.desktop_runtime()==exe;assert len(downloads)==1
+    assert module.desktop_runtime()==exe;assert len(downloads)==1;assert 'VOICECRAFT_SETUP_REQUIRED' not in capsys.readouterr().out
     (exe.parent/'chrome.dll').write_bytes(b'corrupt')
-    module.desktop_runtime();assert len(downloads)==2;assert (exe.parent/'chrome.dll').read_bytes()==b'fixture runtime'
+    module.desktop_runtime();assert 'VOICECRAFT_SETUP_REQUIRED' in capsys.readouterr().out;assert len(downloads)==2;assert (exe.parent/'chrome.dll').read_bytes()==b'fixture runtime'
 
 def test_renderer_rejects_wrong_hash(desktop,monkeypatch):
     module,app=desktop
@@ -37,7 +37,8 @@ def test_renderer_rejects_wrong_hash(desktop,monkeypatch):
     assert not (Path(module.os.environ['LOCALAPPDATA'])/'Voicecraft-Studio-70/desktop-window/Voicecraft70Window.exe').exists()
 
 @pytest.mark.parametrize('window_fails',[False,True])
-def test_window_lifecycle_stops_engine_without_browser(desktop,monkeypatch,window_fails):
+@pytest.mark.parametrize('models_missing',[False,True])
+def test_window_lifecycle_stops_engine_without_browser(desktop,monkeypatch,window_fails,models_missing,capsys):
     module,app=desktop
     import importlib.metadata,types,uvicorn,studio.app,studio.models,webbrowser,time
     monkeypatch.setattr(module.sys,'argv',['desktop.py'])
@@ -45,7 +46,11 @@ def test_window_lifecycle_stops_engine_without_browser(desktop,monkeypatch,windo
     monkeypatch.setattr(module,'desktop_runtime',lambda:executable)
     versions={'fastapi':'0.115.12','uvicorn':'0.34.2','soundfile':'0.13.1','chatterbox-tts':'0.1.7','munch':'4.0.0'}
     monkeypatch.setattr(importlib.metadata,'version',lambda package:versions[package])
-    monkeypatch.setattr(studio.models,'verify',lambda *args:None)
+    downloads=[]
+    def verify(*args):
+        if models_missing:raise RuntimeError('Fixture model is missing')
+    monkeypatch.setattr(studio.models,'verify',verify)
+    monkeypatch.setattr(studio.models,'download',lambda root,name:downloads.append(name))
     monkeypatch.setattr(studio.app,'create_app',lambda *args:types.SimpleNamespace(state=types.SimpleNamespace()))
     monkeypatch.setattr(webbrowser,'open',lambda *args:pytest.fail('A standalone launch must not open a browser'))
     servers=[]
@@ -68,3 +73,5 @@ def test_window_lifecycle_stops_engine_without_browser(desktop,monkeypatch,windo
     assert servers[0].stopped and servers[0].should_exit
     assert servers[0].config.host=='127.0.0.1' and servers[0].config.port==8791
     assert [str(executable)] in calls
+    assert ('VOICECRAFT_SETUP_REQUIRED' in capsys.readouterr().out)==models_missing
+    assert downloads==(['turbo','expressive'] if models_missing else [])

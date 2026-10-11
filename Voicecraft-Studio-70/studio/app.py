@@ -438,7 +438,7 @@ def create_app(root=None, engine=None):
 
     @app.get('/api/health')
     def health():
-        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'70.1.0', 'build':'voicecraft-studio-70', 'recovery_warnings':jobs.recovery_warnings}
+        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'70.1.1', 'build':'voicecraft-studio-70', 'recovery_warnings':jobs.recovery_warnings}
 
     @app.get('/api/system')
     def system_status():

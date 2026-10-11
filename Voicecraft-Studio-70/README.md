@@ -50,7 +50,7 @@ No model weights, virtual environments, private recordings, tokens, or caches ar
 
 ## Versions and rebuilding
 
-Product version: **70.1.0** (display name Voicecraft Studio 70). Windows bundled Python **3.11.9 x64**; cloud test Python **3.11.16**. Electron **44.7.0**. Both Chatterbox integrations use **chatterbox-tts 0.1.7**. Torch/torchaudio **2.6.0**, CPU build `+cpu` tested; installer selects CUDA **12.4** packages when NVIDIA is detected and falls back to CPU if GPU package installation fails. Physical CUDA execution must be tested on the target PC.
+Product version: **70.1.1** (display name Voicecraft Studio 70). Windows bundled Python **3.11.9 x64**; cloud test Python **3.11.16**. Electron **44.7.0**. Both Chatterbox integrations use **chatterbox-tts 0.1.7**. Torch/torchaudio **2.6.0**, CPU build `+cpu` tested; installer selects CUDA **12.4** packages when NVIDIA is detected and falls back to CPU if GPU package installation fails. Physical CUDA execution must be tested on the target PC.
 
 Major pins: FastAPI **0.115.12**, Uvicorn **0.34.2**, SoundFile **0.13.1**, NumPy **1.26.4**, imageio-ffmpeg **0.6.0**, setuptools **78.1.0**, munch **4.0.0**. Full Windows dependency constraints are in `requirements-windows-lock.txt`; renderer uses Node only internally and no npm install is required for normal app use.
 
@@ -69,3 +69,7 @@ For backend development, install the existing requirements into an isolated envi
 Adds the expanded voice-adjustment controls and native desktop Paste actions. Speaking-style preset values combine with user pause, variation and expressiveness adjustments, so manual settings remain effective with a style selected. Bass/treble controls use shelving EQ, clarity uses presence EQ, softness uses low-pass filtering and gentle compression, and noise reduction uses FFmpeg denoising. These are audio treatments, not guaranteed whispering, new emotional acting, or exact voice identity. Existing pitch/speed/volume and all voice features remain. Preview cancellation is unchanged.
 
 The home screen includes the microphone cover, profile counts and voice cards shown in the browser version. It is visible on startup and reachable using Voice Profiles. Install the update over the existing Voicecraft Studio 70 installation after closing the app; the existing voice-data folder and downloaded models are preserved.
+
+## 70.1.1 startup correction
+
+After initial setup, the desktop shortcut starts the Studio directly. Runtime, dependency and model integrity checks run with the diagnostics window hidden. Installation or repair shows progress only when required; startup failures show diagnostics with Retry setup. Closing the Studio still stops its local engine, and reopening reuses existing models and profile data. No browser or command window is required.

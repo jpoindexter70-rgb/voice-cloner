@@ -41,6 +41,7 @@ def desktop_runtime():
             ready=manifest.get('archive_sha256')==spec['sha256'] and all((target/name).is_file() and hashlib.sha256((target/name).read_bytes()).hexdigest()==digest for name,digest in manifest['files'].items())
         except (OSError,ValueError,KeyError):pass
     if not ready:
+        print('VOICECRAFT_SETUP_REQUIRED',flush=True)
         print('Preparing the standalone desktop window from the official Electron release.',flush=True)
         archive=location/'electron-download.zip'
         urllib.request.urlretrieve(spec['url'],archive)
@@ -93,6 +94,7 @@ def main():
         check=subprocess.run([sys.executable,'-c',"import torch,torchaudio,soundfile,fastapi,uvicorn,numpy; from chatterbox.tts_turbo import ChatterboxTurboTTS; from chatterbox.tts import ChatterboxTTS; assert torch.__version__.split('+')[0]=='2.6.0'; assert torchaudio.__version__.split('+')[0]=='2.6.0'"],capture_output=True,cwd=APP)
         ready=check.returncode==0
     if not ready:
+        print('VOICECRAFT_SETUP_REQUIRED',flush=True)
         cuda=False
         if os.name=='nt' and not os.getenv('VOICECRAFT_FORCE_CPU'):
             try:cuda=subprocess.run(['nvidia-smi'],capture_output=True,timeout=10).returncode==0
@@ -111,6 +113,7 @@ def main():
     for name in ('turbo','expressive'):
         try:verify(model_root,name);print('Reusing verified '+name+' models.',flush=True)
         except (OSError,ValueError,KeyError,RuntimeError):
+            print('VOICECRAFT_SETUP_REQUIRED',flush=True)
             print('Preparing '+name+' models. Official downloads require internet; your recordings stay on this computer.',flush=True)
             download(model_root,name)
     from studio.app import create_app

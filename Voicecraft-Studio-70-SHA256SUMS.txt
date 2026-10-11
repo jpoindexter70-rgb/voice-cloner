@@ -1,2 +1,2 @@
-89e369d2d965e29e2fda3543a7dfb86c16e79e361204a115e1daa93d348031d0  Voicecraft-Studio-70-Setup.exe
-6dd844827de887d7d864cdb026fe349e44ca1b60683b7a7ee7c9e14eadbb7f30  Voicecraft-Studio-70-SOURCE.zip
+8bcca83e0bcf512bd75fabde73d8d3becf7c2d04ef978f6b6db30c38b8dc9e21  Voicecraft-Studio-70-Setup.exe
+28cd767bcd0571320c41efd0209ea9c70756357eee2cce1f905c3e7a2387b641  Voicecraft-Studio-70-SOURCE.zip

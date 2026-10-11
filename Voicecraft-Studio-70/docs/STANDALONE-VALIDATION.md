@@ -1,10 +1,10 @@
 # Voicecraft Studio 70 validation
 
-Release 70.1.0; validation performed October 11, 2026. The older VoiceCraft Studio 1.0.0 source remains unchanged; its previous download is retained at its original commit. The Chatterbox engine adapter is byte-identical to VoiceCraft Studio 1.0.0.
+Release 70.1.1; validation performed October 11, 2026. The older VoiceCraft Studio 1.0.0 source remains unchanged; its previous download is retained at its original commit. The Chatterbox engine adapter is byte-identical to VoiceCraft Studio 1.0.0.
 
 ## Verified in this environment
 
-- **46 backend tests passed**, with two upstream deprecation warnings. These include existing 37 audio/profile/consent/jobs/security/model tests, four desktop-runtime/lifecycle cases, and five tone-control/persistence cases.
+- **48 backend tests passed**, with two upstream deprecation warnings. These include existing 37 audio/profile/consent/jobs/security/model tests, six desktop-runtime/lifecycle cases, and five tone-control/persistence cases.
 - Desktop runtime first installation verifies the official Electron 44.7.0 Windows archive SHA-256 and ZIP integrity. Installed runtime files are checked on later launches; corrupted runtime files trigger repair. Wrong-hash downloads are rejected before execution. A missing first-start destination folder discovered in Windows validation was fixed and retested.
 - Lifecycle tests verify loopback port 8791, no external-browser launch, and engine shutdown both when the desktop window exits normally and when the window process fails.
 - A real **Electron 44.7.0 Linux window** executed the retained interface against the real local engine: synthetic microphone capture, script choices, recording adjustments/preview/reset, import and original preservation, per-profile volume/style settings, all ten Turbo presets using actual downloaded checkpoints, playback, generated-audio editing, full narration, native export integration, history deletion, persistence after reload, and narrow-layout checks. No frontend errors occurred.
@@ -56,3 +56,12 @@ Run `node tests/desktop_clipboard.cjs` with ELECTRON_EXE, VOICECRAFT_TEST_ORIGIN
 Actual FFmpeg signal tests quantify the intended bass, treble and presence-band gain, softness high-frequency reduction and unchanged duration. API tests check profile-setting persistence, invalid range rejection, generation settings, recording/generated-audio previews, and preservation of original references. Additional real desktop checks exercise all sliders, unsupported Turbo control disabling, real Turbo and Original previews, recording tone preview/editing, settings after reload and the home dashboard.
 
 Expanded-control desktop results passed with real Turbo and Original checkpoints: Turbo preview 4.52 seconds, Original preview 4.12 seconds. The microphone cover/profile dashboard, per-profile controls, recording tone preview/editing and reload persistence passed. A layout review changed the additional-controls panel from a crowded horizontal row to a responsive grid. Windows FFmpeg tone/noise processing also passed under Wine using the pinned Windows runtime. Physical Windows renderer, microphone and GPU checks remain unverified as stated above.
+
+## 70.1.1 direct startup
+
+- The native launcher starts hidden. Routine runtime/dependency/model verification does not expose Setup & Diagnostics. Python signals installation or repair explicitly before downloads; failures reveal captured diagnostics with Retry setup.
+- The actual compiled Windows launcher was exercised under Wine with isolated Python startup fixtures: warm launch, process exit and reopening, failure followed by Retry setup, required repair, a setup marker split across pipe reads, and a repeated shortcut request during quiet startup. Window visibility and disabled Open Studio before readiness were checked through Win32 APIs. All passed. These fixtures verify launcher behavior, not physical Windows model inference.
+- Python runtime tests check that verified renderer/model reuse stays quiet, renderer corruption and missing models request setup, integrity failures are rejected, and closing/failing desktop processes stop the local engine.
+- Installer remains per-user and preserves existing profile data and downloaded models. No Chatterbox adapter, audio controls, or preview cancellation behavior was changed.
+
+The 70.1.1 regression run repeated the real Electron desktop workflow with synthetic audio: all ten Turbo styles, microphone capture, import/edit previews, playback, native MP3 export, full narration, history deletion, reload persistence, external navigation blocking, and close confirmation. It passed. Native Ctrl+V with multiline Unicode and the right-click Paste menu passed again. Automated backend/runtime suite: 48 passed, two upstream deprecation warnings.

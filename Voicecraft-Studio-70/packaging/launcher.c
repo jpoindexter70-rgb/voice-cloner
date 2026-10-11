@@ -13,6 +13,7 @@
 #define WM_DONE (WM_APP+3)
 #define WM_TRAY (WM_APP+4)
 #define WM_OPEN (WM_APP+5)
+#define WM_SETUP (WM_APP+6)
 static HWND window,logbox,status;
 static HANDLE job,child;
 static WCHAR base[MAX_PATH];
@@ -34,16 +35,17 @@ static DWORD WINAPI worker(LPVOID ignored){
     child=pi.hProcess;
     if(!AssignProcessToJobObject(job,child)){TerminateProcess(child,1);CloseHandle(pi.hThread);CloseHandle(child);child=NULL;CloseHandle(readpipe);PostMessageW(window,WM_DONE,1,0);return 1;}
     ResumeThread(pi.hThread);CloseHandle(pi.hThread);
-    char chunk[4097],tail[8192]={0};DWORD count;
+    char chunk[4097],tail[8192]={0};DWORD count;BOOL setup_shown=FALSE;
     while(ReadFile(readpipe,chunk,4096,&count,NULL)&&count){
         chunk[count]=0;size_t old=strlen(tail);if(old+count>=sizeof(tail)){memmove(tail,tail+old/2,old-old/2+1);old=strlen(tail);}strncat(tail,chunk,sizeof(tail)-old-1);
+        if(!setup_shown&&strstr(tail,"VOICECRAFT_SETUP_REQUIRED")){setup_shown=TRUE;PostMessageW(window,WM_SETUP,0,0);}
         if(strstr(tail,"VOICECRAFT_READY"))PostMessageW(window,WM_READY,0,0);
         int len=MultiByteToWideChar(CP_UTF8,0,chunk,(int)count,NULL,0);WCHAR *text=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,(len+1)*sizeof(WCHAR));
         if(text){MultiByteToWideChar(CP_UTF8,0,chunk,(int)count,text,len);PostMessageW(window,WM_LOG,0,(LPARAM)text);}
     }
     CloseHandle(readpipe);WaitForSingleObject(child,INFINITE);DWORD code=1;GetExitCodeProcess(child,&code);CloseHandle(child);child=NULL;PostMessageW(window,WM_DONE,code,0);return code;
 }
-static void start(void){busy=TRUE;ready=FALSE;SetWindowTextW(status,L"Preparing Voicecraft Studio 70. First setup downloads the desktop window, engine packages and models.");HANDLE thread=CreateThread(NULL,0,worker,NULL,0,NULL);if(thread)CloseHandle(thread);else{busy=FALSE;SetWindowTextW(status,L"Cannot start setup. Close and reopen VoiceCraft.");}}
+static void start(void){busy=TRUE;ready=FALSE;EnableWindow(GetDlgItem(window,102),FALSE);ShowWindow(window,SW_HIDE);SetWindowTextW(status,L"Starting Voicecraft Studio 70. Checking the local runtime quietly.");HANDLE thread=CreateThread(NULL,0,worker,NULL,0,NULL);if(thread)CloseHandle(thread);else{busy=FALSE;SetWindowTextW(status,L"Cannot start setup. Close and reopen VoiceCraft.");ShowWindow(window,SW_SHOW);}}
 static int CALLBACK browse_callback(HWND hwnd,UINT message,LPARAM param,LPARAM data){
     (void)param;
     if(message==BFFM_INITIALIZED&&data){SendMessageW(hwnd,BFFM_SETSELECTIONW,TRUE,data);}
@@ -81,13 +83,15 @@ static LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM w,LPARAM l){
         CreateWindowW(L"BUTTON",L"Retry setup",WS_CHILD|WS_VISIBLE,20,395,140,32,h,(HMENU)101,NULL,NULL);
         CreateWindowW(L"BUTTON",L"Open Studio",WS_CHILD|WS_VISIBLE,175,395,140,32,h,(HMENU)102,NULL,NULL);return 0;
     case WM_LOG:append((WCHAR*)l);HeapFree(GetProcessHeap(),0,(void*)l);return 0;
+    case WM_SETUP:
+        if(!ready&&!smoke){SetWindowTextW(status,L"Preparing Voicecraft Studio 70. Installing or repairing required components; existing recordings are preserved.");ShowWindow(h,SW_SHOW);SetForegroundWindow(h);}return 0;
     case WM_READY:
-        if(!ready){ready=TRUE;SetWindowTextW(status,L"VoiceCraft is running. Use the tray icon to reopen or exit.");ZeroMemory(&tray,sizeof(tray));tray.cbSize=sizeof(tray);tray.hWnd=h;tray.uID=1;tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=WM_TRAY;tray.hIcon=LoadIconW(GetModuleHandleW(NULL),MAKEINTRESOURCEW(1));wcscpy(tray.szTip,L"Voicecraft Studio 70");Shell_NotifyIconW(NIM_ADD,&tray);ShowWindow(h,SW_HIDE);}return 0;
+        if(!ready){ready=TRUE;EnableWindow(GetDlgItem(h,102),TRUE);SetWindowTextW(status,L"VoiceCraft is running. Use the tray icon to reopen or exit.");ZeroMemory(&tray,sizeof(tray));tray.cbSize=sizeof(tray);tray.hWnd=h;tray.uID=1;tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=WM_TRAY;tray.hIcon=LoadIconW(GetModuleHandleW(NULL),MAKEINTRESOURCEW(1));wcscpy(tray.szTip,L"Voicecraft Studio 70");Shell_NotifyIconW(NIM_ADD,&tray);ShowWindow(h,SW_HIDE);}return 0;
     case WM_DONE:
         busy=FALSE;if(smoke){PostQuitMessage((int)w);return 0;}
         if(w){WCHAR message[160];swprintf(message,160,L"Setup stopped (code %lu). Read the details below, then Retry setup.",(unsigned long)w);SetWindowTextW(status,message);ShowWindow(h,SW_SHOW);SetForegroundWindow(h);}else{DestroyWindow(h);}return 0;
     case WM_COMMAND:if(LOWORD(w)==101&&!busy)start();if(LOWORD(w)==102&&ready)open_window();if(LOWORD(w)==201)open_window();if(LOWORD(w)==202)DestroyWindow(h);return 0;
-    case WM_OPEN:if(ready)open_window();else{ShowWindow(h,SW_SHOW);SetForegroundWindow(h);}return 0;
+    case WM_OPEN:if(ready)open_window();else if(IsWindowVisible(h))SetForegroundWindow(h);return 0;
     case WM_TRAY:
         if(l==WM_LBUTTONDBLCLK){open_window();}
         if(l==WM_RBUTTONUP){HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING,201,L"Open VoiceCraft");AppendMenuW(menu,MF_STRING,202,L"Exit VoiceCraft");POINT p;GetCursorPos(&p);SetForegroundWindow(h);TrackPopupMenu(menu,TPM_RIGHTBUTTON,p.x,p.y,0,h,NULL);DestroyMenu(menu);}return 0;
@@ -96,10 +100,10 @@ static LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM w,LPARAM l){
     }return DefWindowProcW(h,msg,w,l);
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,LPWSTR args,int show){
-    (void)previous;GetModuleFileNameW(NULL,base,MAX_PATH);WCHAR *slash=wcsrchr(base,L'\\');if(slash)*slash=0;
+    (void)previous;(void)show;GetModuleFileNameW(NULL,base,MAX_PATH);WCHAR *slash=wcsrchr(base,L'\\');if(slash)*slash=0;
     if(wcsstr(args,L"--choose-storage")){choose_storage();return 0;}smoke=wcsstr(args,L"--check-runtime")!=NULL;
     HANDLE mutex=CreateMutexW(NULL,FALSE,L"Local\\Voicecraft70DesktopMutex");if(!smoke&&GetLastError()==ERROR_ALREADY_EXISTS){HWND existing=FindWindowW(L"Voicecraft70Desktop",NULL);if(existing)PostMessageW(existing,WM_OPEN,0,0);CloseHandle(mutex);return 0;}
     job=CreateJobObjectW(NULL,NULL);JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={0};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits));
     WNDCLASSW cls={0};cls.lpfnWndProc=proc;cls.hInstance=instance;cls.lpszClassName=L"Voicecraft70Desktop";cls.hCursor=LoadCursorW(NULL,IDC_ARROW);cls.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);cls.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(1));RegisterClassW(&cls);
-    window=CreateWindowW(cls.lpszClassName,L"Voicecraft Studio 70 — Setup & Diagnostics",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,780,490,NULL,NULL,instance,NULL);ShowWindow(window,smoke?SW_HIDE:show);start();MSG msg;while(GetMessageW(&msg,NULL,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}CloseHandle(mutex);return (int)msg.wParam;
+    window=CreateWindowW(cls.lpszClassName,L"Voicecraft Studio 70 — Setup & Diagnostics",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,780,490,NULL,NULL,instance,NULL);ShowWindow(window,SW_HIDE);start();MSG msg;while(GetMessageW(&msg,NULL,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}CloseHandle(mutex);return (int)msg.wParam;
 }

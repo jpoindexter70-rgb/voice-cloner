@@ -1,3 +1,7 @@
+# Current simplified release
+
+Read [SIMPLE-VOICEOVER.md](SIMPLE-VOICEOVER.md) for current 2.1.1 behavior and tests. The original release results below are historical; they do not claim physical Windows/GPU/microphone verification.
+
 # Validation and remaining prerequisites
 
 Executed in this cloud machine:

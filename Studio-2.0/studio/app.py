@@ -52,7 +52,7 @@ class Profile(BaseModel):
 
 
 class VoiceSettings(BaseModel):
-    engine: str = Field(default='expressive', pattern='^(expressive|turbo)$')
+    engine: str = Field(default='turbo', pattern='^(expressive|turbo)$')
     device: str = Field(default='auto', pattern='^(auto|cpu|cuda)$')
     speed: float = Field(default=1, ge=.5, le=2)
     pitch: float = Field(default=0, ge=-6, le=6)
@@ -69,6 +69,15 @@ class Speech(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
     settings: VoiceSettings | None = None
 
+
+class Rename(BaseModel):
+    name: str = Field(min_length=1,max_length=120)
+
+class HistorySelection(BaseModel):
+    ids: list[str] | None = Field(default=None,max_length=1000)
+
+class Preview(Speech):
+    seconds: int = Field(default=10,ge=5,le=10)
 
 class Batch(BaseModel):
     texts: list[str] = Field(min_length=1, max_length=20)
@@ -408,7 +417,7 @@ def create_app(root=None, engine=None):
 
     @app.get('/api/health')
     def health():
-        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'2.1.0', 'build':'family-seed-2026.10.11', 'recovery_warnings':jobs.recovery_warnings}
+        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'2.1.1', 'build':'simple-voiceover', 'recovery_warnings':jobs.recovery_warnings}
 
     @app.get('/api/system')
     def system_status():
@@ -542,16 +551,8 @@ def create_app(root=None, engine=None):
     @app.delete('/api/profiles/{identity}/generated/{asset}')
     def delete_generated(identity: str, asset: str):
         with lock:
-            require_idle(identity)
-            path = generated(identity, asset)
-            person = read(identity)
-            path.unlink(missing_ok=True)
-            path.with_suffix('.mp3').unlink(missing_ok=True)
-            person['generated'] = [item for item in person['generated'] if item['id'] != asset]
-            write(folder(identity), person)
-            if persistence:
-                persistence.delete_generated(identity, asset)
-        return {'deleted': asset}
+            remove_history(identity,[asset])
+        return {'deleted':asset}
 
     @app.get('/api/profiles/{identity}/originals/{asset}')
     def original_recording(identity: str, asset: str):
@@ -740,6 +741,69 @@ def create_app(root=None, engine=None):
             require_idle();settings=configured(identity,None);ready('seed')
             try:return jobs.submit(identity,settings,kind='benchmark',block=body.block_seconds)
             except ValueError as exc:raise HTTPException(400,str(exc))
+
+    def remove_history(identity,ids=None):
+        require_idle(identity);person=read(identity)
+        existing={item['id'] for item in person['generated']}
+        selected=existing if ids is None else set(ids)
+        if not selected<=existing:raise HTTPException(404,'Selected audio does not belong to this profile')
+        paths=[]
+        for asset in selected:
+            try:asset=str(uuid.UUID(asset))
+            except ValueError:raise HTTPException(400,'Invalid audio identity')
+            paths.extend([folder(identity)/'generated-audio'/(asset+'.wav'),folder(identity)/'generated-audio'/(asset+'.mp3')])
+        forgotten=[key for key,job in jobs.jobs.items() if job['profile']==identity and job['kind'] in ('speech','conversion') and (ids is None or key in selected)]
+        person['generated']=[item for item in person['generated'] if item['id'] not in selected]
+        write(folder(identity),person)
+        for path in paths:path.unlink(missing_ok=True)
+        for key in forgotten:
+            (jobs.directory/(key+'.json')).unlink(missing_ok=True)
+            jobs.jobs.pop(key,None);jobs.cancelled.discard(key)
+        if persistence:
+            for asset in selected:persistence.delete_generated(identity,asset)
+        return {'deleted_audio':len(selected),'deleted_jobs':len(forgotten)}
+
+    @app.post('/api/profiles/{identity}/history/delete')
+    def delete_history(identity: str,body: HistorySelection):
+        with lock:return remove_history(identity,body.ids)
+
+    @app.delete('/api/history')
+    def clear_all_history():
+        with lock:
+            require_idle();count=0;job_count=0
+            for path in families.iterdir():
+                if path.is_dir() and (path/'settings/profile.json').is_file():
+                    result=remove_history(path.name);count+=result['deleted_audio'];job_count+=result['deleted_jobs']
+            for key,job in list(jobs.jobs.items()):
+                if job['kind'] in ('speech','conversion'):
+                    (jobs.directory/(key+'.json')).unlink(missing_ok=True);jobs.jobs.pop(key,None);jobs.cancelled.discard(key);job_count+=1
+            return {'deleted_audio':count,'deleted_jobs':job_count}
+
+    @app.patch('/api/profiles/{identity}/references/{asset}')
+    def rename_reference(identity: str,asset: str,body: Rename):
+        with lock:
+            require_idle(identity);person=read(identity)
+            item=next((r for r in person['recordings'] if r['id']==asset),None)
+            if item is None:raise HTTPException(404,'Recording does not belong to this profile')
+            if not body.name.strip():raise HTTPException(400,'Name cannot be blank')
+            item['name']=body.name.strip();write(folder(identity),person);return person
+
+    @app.patch('/api/profiles/{identity}/generated/{asset}')
+    def rename_generated(identity: str,asset: str,body: Rename):
+        with lock:
+            require_idle(identity);person=read(identity)
+            item=next((r for r in person['generated'] if r['id']==asset),None)
+            if item is None:raise HTTPException(404,'Audio does not belong to this profile')
+            if not body.name.strip():raise HTTPException(400,'Name cannot be blank')
+            item['name']=body.name.strip();write(folder(identity),person);return item
+
+    @app.post('/api/profiles/{identity}/preview')
+    def short_preview(identity: str,body: Preview):
+        settings=configured(identity,body.settings);ready(settings['engine'])
+        text=' '.join(body.text.split()[:24])[:180].strip()
+        if not text:raise HTTPException(400,'Enter some narration first')
+        try:return jobs.submit(identity,settings,text=text,preview_seconds=body.seconds)
+        except ValueError as exc:raise HTTPException(400,str(exc))
 
     app.mount('/static', StaticFiles(directory=static), name='static')
     return app

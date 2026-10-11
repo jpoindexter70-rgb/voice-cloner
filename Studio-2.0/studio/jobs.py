@@ -54,7 +54,7 @@ class Jobs:
                 return True
         return False
 
-    def submit(self,profile,settings,text=None,source=None,kind=None,steps=100,block=.5,adaptation=None):
+    def submit(self,profile,settings,text=None,source=None,kind=None,steps=100,block=.5,adaptation=None,preview_seconds=None):
         with self.lock:
             self.last_activity=time.monotonic()
             if self.live:raise ValueError('Stop live conversion before queuing another model operation.')
@@ -68,7 +68,7 @@ class Jobs:
                  'settings':settings,'kind':kind or ('conversion' if source is not None else 'speech'),'text':text,'status':'queued',
                  'progress':0,'created_at':now(),'error':None,'result':None,'elapsed_seconds':0,'training_steps':steps,'block_seconds':block,
                  'recordings':[r['id'] for r in person['recordings']],
-                 'adaptation':adaptation if adaptation is not None else person.get('active_adaptation')}
+                 'adaptation':adaptation if adaptation is not None else person.get('active_adaptation'),'preview_seconds':preview_seconds}
             self.jobs[job['id']]=job;self.save(job)
             if source is not None:(self.temporary/(job['id']+'.source.wav')).write_bytes(source)
             self.executor.submit(self.run,job['id'])
@@ -106,10 +106,12 @@ class Jobs:
                 settings=job['settings']
                 if settings['speed']!=1 or settings['pitch']!=0:process(work,target,speed=settings['speed'],pitch=settings['pitch'])
                 else:work.replace(target)
+                if job.get('preview_seconds'):
+                    clip,rate=sf.read(target,dtype='float32');sf.write(target,clip[:int(rate*job['preview_seconds'])],rate,subtype='PCM_16')
                 self.permitted(job);person=self.read(job['profile'])
                 result={'id':identity,'kind':job['kind'],'created_at':now(),'text':job['text'],
                         'reference':job['reference'],'settings':settings,'seconds':round(sf.info(target).duration,2),
-                        'engine':self.engine.name,'device':self.engine.device,'rating':None,'ai_generated':True,'adaptation':job.get('adaptation') if job['kind']=='conversion' and settings.get('conversion_engine')=='seed' else None}
+                        'engine':self.engine.name,'device':self.engine.device,'preview':bool(job.get('preview_seconds')),'rating':None,'ai_generated':True,'adaptation':job.get('adaptation') if job['kind']=='conversion' and settings.get('conversion_engine')=='seed' else None}
 
                 elapsed = time.monotonic() - started
                 result['processing_seconds'] = round(elapsed, 2)

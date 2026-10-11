@@ -15,7 +15,7 @@ def ready():
     try:
         for name,version in [('fastapi','0.115.12'),('chatterbox-tts','0.1.7'),('munch','4.0.0'),('wsproto','1.3.2'),('torch','2.6.0')]:
             if importlib.metadata.version(name).split('+')[0]!=version:return False
-        for name,spec in {**SPECS,**ASSETS}.items():
+        for name,spec in SPECS.items():
             manifest=json.loads((root/name/'manifest.json').read_text())
             if manifest['repository']!=spec['repository'] or spec.get('revision',manifest['revision'])!=manifest['revision']:return False
             for filename in spec['files']:

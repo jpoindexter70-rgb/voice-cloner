@@ -1,3 +1,11 @@
+# AI Voice Cloning Studio — Build 2.1.1
+
+The original Studio has been simplified for voiceovers. Use **Open Studio 2.0.cmd**; existing launchers and locally installed Chatterbox models are preserved. Read [the simplified workflow and verification](docs/SIMPLE-VOICEOVER.md).
+
+Record/import a voice → choose a profile → set pitch/speed → paste narration → short preview/full generation → playback/WAV/MP3 export. Rename/delete recordings and audio; clear selected, per-profile or all generation history without deleting saved voices.
+
+The following original documentation describes retained architecture and legacy components; experimental features are no longer shown in the simplified interface.
+
 # AI Voice Cloning Studio 2.0
 
 Independent browser application with a new Family Voice Library and real neural voice engine integration. Existing Voice Control Room files are unchanged.

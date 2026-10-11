@@ -3,3 +3,5 @@ uvicorn==0.34.2
 python-multipart==0.0.20
 soundfile==0.13.1
 numpy==1.26.4
+imageio-ffmpeg==0.6.0
+Pillow==12.3.0

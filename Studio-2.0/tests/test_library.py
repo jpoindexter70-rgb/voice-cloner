@@ -50,7 +50,7 @@ def test_revocation_and_child_lock(tmp_path):
     child=profile(c,'Child',True)
     assert child['consent_status']=='guardian_verification_pending'
     assert c.post(f'/api/profiles/{child["id"]}/references',files={'file':('test.wav',wave())}).status_code==403
-    assert c.post(f'/api/profiles/{child["id"]}/generate').status_code==403
+    assert c.post(f'/api/profiles/{child["id"]}/generate',json={'text':'Test'}).status_code==403
 
 
 def test_delete_preserves_other_family_and_shared_models(tmp_path):
@@ -68,7 +68,7 @@ def test_permission_security_quality_and_truthful_engine_status(tmp_path):
     a=profile(c)
     assert c.post('/api/evaluate',files={'file':('tone.wav',wave())}).json()['seconds']==10
     assert c.post('/api/evaluate',files={'file':('bad.wav',b'invalid')}).status_code==400
-    assert c.post(f'/api/profiles/{a["id"]}/generate').status_code==503
+    assert c.post(f'/api/profiles/{a["id"]}/generate',json={'text':'Test'}).status_code==503
     assert c.delete(f'/api/profiles/{a["id"]}',headers={'X-Studio-Token':''}).status_code==403
     assert c.get('/api/profiles',headers={'Origin':'https://example.com'}).status_code==403
     assert TestClient(c.app).get('/api/profiles').status_code==401

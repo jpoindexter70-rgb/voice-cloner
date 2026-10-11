@@ -1,47 +1,32 @@
 # AI Voice Cloning Studio 2.0
 
-New standalone application, written independently of the existing voice-cloner app. Family Voice Library is part of the main studio, with a compact sidebar and a card dashboard.
+Independent browser application with a new Family Voice Library and real neural voice engine integration. Existing Voice Control Room files are unchanged.
 
-## Run
+Implemented: separate family cards, names/avatars, authorization records, language/accent preferences, per-profile engine/settings, microphone capture with selection, pause/resume and live waveform/meter, import/preview/signal checks, original-preserving normalized references and edits, reference selection, serialized speech jobs, long-text segmentation, batch scripts, recorded voice conversion, progress/cancellation/recovery, generated history/playback, waveform seeking, listening ratings, WAV/MP3 export, model unloading, disk dashboard, safe temporary cleanup and private verified backup/restore. Child voices stay locked pending verified guardian authorization. English synthesis is supported; language preferences do not imply an unsupported engine language.
 
-Linux/cloud:
+Real Expressive/Turbo inference, conversion and browser export checks passed. See [validation](docs/VALIDATION.md) for exact scope. Naturalness and personal similarity are not yet assessed with family speech. Live conversion and verified child-account access remain unavailable.
+
+## Browser hosting, with no repeated user installation
+
+The hosted app needs an actual hosting account, not a download link. The prepared deployment uses a private Hugging Face Docker Space on free CPU hardware and a private dataset for profile persistence. No paid hardware/storage upgrade is requested. Actual account quotas apply. Securely supply `HF_DEPLOY_TOKEN` with permission to create/write your private Space and dataset, and `STUDIO2_HOST_PASSWORD` of at least 16 characters. Do not paste them into chat or commit them. Environment requirements are saved in the cloud configuration draft.
+
+Run `.venv-ai/bin/python scripts/deploy_space.py` after credentials are injected. It creates only its new private repositories, stores the password in hosted secret settings, and uploads only the new app source. Partial deployment state contains repository identities only; retry resumes resources this script created. Existing unrecognized repositories are not overwritten. Verify actual Space build/startup, password rejection, functional requests and a generated clip before calling deployment ready.
+
+Hosted audio/settings live on the private server and, when configured, the owner's private dataset. They are not automatically stored on the user's D: drive. Historical private dataset revisions are backups that require separate removal for complete deletion. Real dataset synchronization is unverified until connected. HTTPS and password authentication are mandatory for hosted mode; it has no public sharing route. Optional shared-household passwords are not per-child restricted accounts.
+
+## Development / optional local Windows server
+
+Use the existing checkout; each cloud task is already isolated and does not need a new worktree.
 
 ```bash
 cd /workspace/voice-cloner/Studio-2.0
-python -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m studio
+python3.11 -m venv .venv-ai
+.venv-ai/bin/python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+.venv-ai/bin/python -m pip install -r requirements-engine.txt -c requirements-engine-lock.txt
+.venv-ai/bin/python -m studio.models download --root .runtime/shared-models --engine all
+.venv-ai/bin/python -m studio
 ```
 
-On Windows, extract into a separate directory such as `D:\AI-Voice-Cloning-Studio-App`, install Python 3.11, run `Install Studio 2.0.cmd`, then `Start Studio 2.0.cmd`. Open your browser at loopback port 8770. The batch scripts have not been tested on Windows.
+Linux data defaults to this project's `.runtime`. `STUDIO2_DATA_DIR` selects data; `STUDIO2_MODEL_DIR` can share verified base checkpoints while keeping QA data separate. Windows defaults to `D:\AI-Voice-Cloning-Studio`, and requires an explicit override when D: is unavailable. Models are shared across profiles; no duplicate per-family model downloads. The two engine variants have distinct decoder weights. Windows/GPU installation and devices still need validation there.
 
-Default Windows data is `D:\AI-Voice-Cloning-Studio`. If D: is unavailable, the app requires an explicit `STUDIO2_DATA_DIR` override; it does not silently move large data onto C:. Linux cloud defaults to this project's `.runtime` folder. Use `STUDIO2_DATA_DIR` to choose another private directory.
-
-## Implemented
-
-- Add, edit, select and delete multiple independent family profiles; optional PNG avatar.
-- Documented adult permission, local authorization record and creation date. Revocation blocks reference playback, recording enrollment and generation requests.
-- Child profiles are created in a locked state. No guardian verification implementation exists yet; no child playback, recording enrollment or generation is permitted.
-- Microphone selection, live volume meter, record/stop, preview and WAV capture; browser permission required.
-- WAV/FLAC import, preview and signal evaluation before saving. RMS, clipping and duration are signal checks, not an AI voice-quality score.
-- Multiple recording sessions per profile; choose a primary voice reference. Adding recordings does not claim adaptation or retraining.
-- Separate reference, sample, voice-model, generated-audio and settings folders per UUID; shared-models directory outside profile folders.
-- Preferred language, accent and speed stored separately. These are preferences, not promises of engine capabilities.
-- Persistent profiles and reference settings; local storage dashboard.
-- Loopback binding, Host/Origin restrictions, session cookies and mutation tokens. No public sharing route.
-
-## Still unimplemented
-
-AI engine integration, real cloned speech generation, generated history playback/export, MP3 import/export, voice-to-voice conversion, real-time conversion, engine adaptation/retraining, independently verified guardian identity and managed restricted accounts. Generation is visibly disabled and the API returns an explicit unavailable error; no fabricated output is created. Naturalness and speaker similarity cannot yet be assessed.
-
-The samples/generated-audio/voice-model folders reserve storage for future engine integration; currently sample playback uses the selected original reference. The UI labels it as a voice sample and does not call it generated speech.
-
-Local documented adult permission is not identity verification. Anyone with access to the studio's local browser session can manage adult profiles. Use a private OS account and disk encryption. Profile deletion removes active local data, not exported files or external backups; it is not forensic erasure.
-
-## Validation
-
-`.venv/bin/python -m pytest -q`: four integration tests passed, exercising profile isolation, persisted settings/reference selection, actual WAV decoding, revocation, child locks, deletion isolation, input rejection, session/origin restrictions and truthful missing-engine errors. Linux synthetic browser recording is separate from physical microphone/Windows testing.
-
-Existing applications and the existing voice-cloner source were left unchanged. This new app is published in the Studio-2.0 folder on its own Git branch. The original application is unchanged.
-
-Browser validation also passed: profile creation, synthetic microphone recording, signal evaluation/save, actual sample playback, voice selection, consent revocation and deletion, with no JavaScript errors. Run `tests/browser_smoke.py` with Playwright and system Chromium against a clean test instance on port 8770; do not use personal data. Physical devices remain untested.
+Full neural synthesis needs the server; opening a standalone HTML file does not run PyTorch. The `browser` directory is the earlier library-only companion, clearly labeled as such. The user does not need further partial downloads to obtain a hosted app; deployment account access is the remaining prerequisite for an address.

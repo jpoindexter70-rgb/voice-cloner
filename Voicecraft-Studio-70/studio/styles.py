@@ -18,5 +18,6 @@ def effective(settings):
     result['pitch']=max(-6,min(6,settings['pitch']+preset['pitch']))
     result['volume']=max(0,min(2,settings.get('volume',1)*preset['volume']))
     if settings.get('style','normal')!='normal':
-        for name in ('pause','temperature','expression'):result[name]=preset[name]
+        for name,low,high in [('pause',0,2),('temperature',.1,1.5),('expression',0,1.5)]:
+            result[name]=max(low,min(high,settings.get(name,STYLES['normal'][name])+preset[name]-STYLES['normal'][name]))
     return result

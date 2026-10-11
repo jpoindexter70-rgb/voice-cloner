@@ -53,6 +53,13 @@ class Profile(BaseModel):
 
 
 class VoiceSettings(BaseModel):
+    warmth: float = Field(default=0, ge=-6, le=6)
+    brightness: float = Field(default=0, ge=-6, le=6)
+    softness: float = Field(default=0, ge=0, le=100)
+    clarity: float = Field(default=0, ge=0, le=100)
+    denoise: bool = False
+    noise_strength: float = Field(default=12, ge=0, le=30)
+
     style: str = Field(default='normal', pattern='^(normal|storytelling|bedtime|energetic|calm|horror|presenter|food|demo|review)$')
     volume: float = Field(default=1, ge=0, le=2)
     engine: str = Field(default='turbo', pattern='^(expressive|turbo)$')
@@ -98,6 +105,11 @@ class BenchmarkRequest(BaseModel):
     block_seconds: float = Field(default=.5)
 
 class AudioEdit(BaseModel):
+    warmth: float = Field(default=0, ge=-6, le=6)
+    brightness: float = Field(default=0, ge=-6, le=6)
+    softness: float = Field(default=0, ge=0, le=100)
+    clarity: float = Field(default=0, ge=0, le=100)
+
     start: float = Field(default=0, ge=0)
     end: float | None = Field(default=None, gt=0)
     speed: float = Field(default=1, ge=.5, le=2)
@@ -426,7 +438,7 @@ def create_app(root=None, engine=None):
 
     @app.get('/api/health')
     def health():
-        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'70.0.0', 'build':'voicecraft-studio-70', 'recovery_warnings':jobs.recovery_warnings}
+        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'70.1.0', 'build':'voicecraft-studio-70', 'recovery_warnings':jobs.recovery_warnings}
 
     @app.get('/api/system')
     def system_status():
@@ -606,7 +618,7 @@ def create_app(root=None, engine=None):
             if (end-body.start)/body.speed<3:raise HTTPException(400,'Keep at least 3 seconds for a voice reference.')
             new_id=str(uuid.uuid4());target=folder(identity)/'references'/new_id
             temporary=folder(identity)/'references'/(new_id+'.wav')
-            audio_tools.process(source,temporary,start=body.start,end=end,speed=body.speed,pitch=body.pitch,denoise=body.denoise,volume=body.volume,noise_strength=body.noise_strength)
+            audio_tools.process(source,temporary,start=body.start,end=end,speed=body.speed,pitch=body.pitch,denoise=body.denoise,volume=body.volume,noise_strength=body.noise_strength,warmth=body.warmth,brightness=body.brightness,softness=body.softness,clarity=body.clarity)
             quality=analyze(temporary.read_bytes())[1];temporary.replace(target)
             person['recordings'].append({'id':new_id,'name':'Edited reference.wav','created_at':datetime.now(timezone.utc).isoformat(),'quality':quality,'original':asset})
             write(folder(identity),person)
@@ -627,7 +639,7 @@ def create_app(root=None, engine=None):
             target = jobs.temporary / ('reference-preview-' + str(uuid.uuid4()) + '.wav')
             try:
                 audio_tools.process(source, target, start=body.start, end=end, speed=body.speed,
-                                    pitch=body.pitch, denoise=body.denoise,volume=body.volume,noise_strength=body.noise_strength)
+                                    pitch=body.pitch, denoise=body.denoise,volume=body.volume,noise_strength=body.noise_strength,warmth=body.warmth,brightness=body.brightness,softness=body.softness,clarity=body.clarity)
                 analyze(target.read_bytes())
             except Exception:
                 target.unlink(missing_ok=True)

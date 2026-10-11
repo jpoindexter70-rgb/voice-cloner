@@ -7,10 +7,10 @@ OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Voicecraft Studio 70"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-VIProductVersion "70.0.0.0"
+VIProductVersion "70.1.0.0"
 VIAddVersionKey /LANG=1033 "ProductName" "Voicecraft Studio 70"
 VIAddVersionKey /LANG=1033 "FileDescription" "Voicecraft Studio 70 Setup"
-VIAddVersionKey /LANG=1033 "FileVersion" "70.0.0"
+VIAddVersionKey /LANG=1033 "FileVersion" "70.1.0"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Voicecraft Studio 70 contributors"
 !define MUI_ICON "voicecraft.ico"
 !define MUI_UNICON "voicecraft.ico"
@@ -47,7 +47,7 @@ Section "Voicecraft Studio 70"
  CreateShortcut "$SMPROGRAMS\Voicecraft Studio 70\Voicecraft Studio 70.lnk" "$INSTDIR\VoiceCraft.exe"
  CreateShortcut "$DESKTOP\Voicecraft Studio 70.lnk" "$INSTDIR\VoiceCraft.exe"
  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoicecraftStudio70" "DisplayName" "Voicecraft Studio 70"
- WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoicecraftStudio70" "DisplayVersion" "70.0.0"
+ WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoicecraftStudio70" "DisplayVersion" "70.1.0"
  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoicecraftStudio70" "UninstallString" '"$INSTDIR\Uninstall.exe"'
  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoicecraftStudio70" "DisplayIcon" "$INSTDIR\VoiceCraft.exe"
 SectionEnd

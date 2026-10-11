@@ -1,5 +1,5 @@
 'use strict';
-const {app, BrowserWindow, session, dialog} = require('electron');
+const {app, BrowserWindow, session, dialog, Menu} = require('electron');
 const path = require('node:path');
 const ORIGIN = process.env.VOICECRAFT_DESKTOP_ORIGIN || 'http://127.0.0.1:8791';
 const url = new URL(ORIGIN);
@@ -25,7 +25,10 @@ else {
       item.once('done', (_event,state) => {if(state !== 'completed' && state !== 'cancelled')dialog.showErrorBox('Export failed','The audio could not be saved. Please try exporting again.');});
     });
     window = new BrowserWindow({title:'Voicecraft Studio 70',width:1440,height:960,minWidth:820,minHeight:600,backgroundColor:'#151719',autoHideMenuBar:true,icon:path.join(__dirname,'voicecraft.ico'),webPreferences:{partition:'persist:voicecraft70',nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,allowRunningInsecureContent:false}});
-    window.removeMenu();
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]}]));
+    window.webContents.on('context-menu', (_event, params) => {
+      if(params.isEditable)Menu.buildFromTemplate([{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]).popup({window});
+    });
     window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
     window.webContents.on('will-navigate',(event,target)=>{if(!local(target))event.preventDefault();});
     window.webContents.on('will-redirect',(event,target)=>{if(!local(target))event.preventDefault();});

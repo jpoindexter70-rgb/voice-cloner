@@ -1,10 +1,10 @@
 # Voicecraft Studio 70 validation
 
-Release 70.0.0; validation performed October 11, 2026. Original VoiceCraft Studio files and prior installers remain unchanged. The Chatterbox engine adapter is byte-identical to VoiceCraft Studio 1.0.0.
+Release 70.1.0; validation performed October 11, 2026. The older VoiceCraft Studio 1.0.0 source remains unchanged; its previous download is retained at its original commit. The Chatterbox engine adapter is byte-identical to VoiceCraft Studio 1.0.0.
 
 ## Verified in this environment
 
-- **41 backend tests passed**, with two upstream deprecation warnings. These include existing 37 audio/profile/consent/jobs/security/model tests and four desktop-runtime/lifecycle cases.
+- **46 backend tests passed**, with two upstream deprecation warnings. These include existing 37 audio/profile/consent/jobs/security/model tests, four desktop-runtime/lifecycle cases, and five tone-control/persistence cases.
 - Desktop runtime first installation verifies the official Electron 44.7.0 Windows archive SHA-256 and ZIP integrity. Installed runtime files are checked on later launches; corrupted runtime files trigger repair. Wrong-hash downloads are rejected before execution. A missing first-start destination folder discovered in Windows validation was fixed and retested.
 - Lifecycle tests verify loopback port 8791, no external-browser launch, and engine shutdown both when the desktop window exits normally and when the window process fails.
 - A real **Electron 44.7.0 Linux window** executed the retained interface against the real local engine: synthetic microphone capture, script choices, recording adjustments/preview/reset, import and original preservation, per-profile volume/style settings, all ten Turbo presets using actual downloaded checkpoints, playback, generated-audio editing, full narration, native export integration, history deletion, persistence after reload, and narrow-layout checks. No frontend errors occurred.
@@ -44,3 +44,15 @@ Start the backend with `STUDIO2_DATA_DIR` pointing to the QA directory, `STUDIO2
 - `NODE_PATH`: desktop/node_modules, if needed for Node module resolution.
 
 The harness requires an empty profile library and performs real model inference. On this isolated Linux container only, `VOICECRAFT_LINUX_QA_NO_SANDBOX=1` was necessary because container namespace policy blocks Chromium's OS sandbox. This sets a test-process command argument; the shipped application does not disable its sandbox or Windows security settings.
+
+## 70.1.0 paste correction
+
+Added native editing menu roles for Ctrl+V, Ctrl+C, Ctrl+X, Select All, Undo/Redo and an editable right-click menu with Paste. The script remains a regular textarea and no clipboard contents are uploaded. A real Electron clipboard test checks single-line and multiline Unicode narration pasted through Ctrl+V and invokes the editable right-click menu. Preview cancellation and every voice-engine/backend behavior are unchanged by this patch.
+
+Run `node tests/desktop_clipboard.cjs` with ELECTRON_EXE, VOICECRAFT_TEST_ORIGIN and the same desktop test environment described above.
+
+## Expanded voice adjustments
+
+Actual FFmpeg signal tests quantify the intended bass, treble and presence-band gain, softness high-frequency reduction and unchanged duration. API tests check profile-setting persistence, invalid range rejection, generation settings, recording/generated-audio previews, and preservation of original references. Additional real desktop checks exercise all sliders, unsupported Turbo control disabling, real Turbo and Original previews, recording tone preview/editing, settings after reload and the home dashboard.
+
+Expanded-control desktop results passed with real Turbo and Original checkpoints: Turbo preview 4.52 seconds, Original preview 4.12 seconds. The microphone cover/profile dashboard, per-profile controls, recording tone preview/editing and reload persistence passed. A layout review changed the additional-controls panel from a crowded horizontal row to a responsive grid. Windows FFmpeg tone/noise processing also passed under Wine using the pinned Windows runtime. Physical Windows renderer, microphone and GPU checks remain unverified as stated above.

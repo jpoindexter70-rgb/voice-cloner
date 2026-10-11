@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 from .engine import split_text
-from .audio import process
+from .audio import process, voice_processing, needs_processing
 from .styles import effective
 
 
@@ -105,7 +105,7 @@ class Jobs:
             with self.lock:
                 self.permitted(job);folder=self.folder(job['profile']);target=folder/'generated-audio'/(identity+'.wav')
                 settings=effective(job['settings'])
-                if settings['speed']!=1 or settings['pitch']!=0 or settings.get('volume',1)!=1:process(work,target,speed=settings['speed'],pitch=settings['pitch'],volume=settings.get('volume',1))
+                if needs_processing(settings):process(work,target,**voice_processing(settings))
                 else:work.replace(target)
                 if job.get('preview_seconds'):
                     clip,rate=sf.read(target,dtype='float32');sf.write(target,clip[:int(rate*job['preview_seconds'])],rate,subtype='PCM_16')

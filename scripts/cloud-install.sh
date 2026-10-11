@@ -13,7 +13,7 @@ if [ ! -x .venv-311/bin/python ]; then
   uv venv .venv-311 --seed --python /workspace/voice-cloner/.runtime/python/cpython-3.11-linux-x86_64-gnu/bin/python3.11
 fi
 .venv-311/bin/python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
-.venv-311/bin/python -m pip install -r requirements-engine.txt -r requirements-dev.txt
+.venv-311/bin/python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
 .venv-311/bin/python -m pip check
 .venv-311/bin/python -m pytest -q
 # Close any studio server before model repair. This command never sends voice recordings.

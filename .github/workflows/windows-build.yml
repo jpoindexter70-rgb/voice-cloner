@@ -1,0 +1,310 @@
+name: Windows desktop installer
+on:
+  push:
+    branches: [main, 'build/**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      acceleration:
+        description: 'Bundled runtime: CPU or CUDA 12.4 (hardware acceptance remains separate)'
+        required: false
+        default: cpu
+        type: choice
+        options: [cpu, cu124]
+      verified_build_run:
+        description: 'Publish artifacts from a completed successful installer build; empty builds normally'
+        required: false
+        type: string
+      repackage_run:
+        description: 'Reuse a successful identical bundled application for installer-only changes'
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: windows-desktop-${{ github.event.pull_request.head.ref || github.ref_name }}-${{ inputs.acceleration || 'cpu' }}
+  cancel-in-progress: true
+jobs:
+  build-and-install:
+    if: github.event_name != 'workflow_dispatch' || inputs.verified_build_run == ''
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      VCR_DATA_DIR: '${{ github.workspace }}\test-data'
+      HF_HOME: '${{ github.workspace }}\hf-cache'
+      NUMBA_CACHE_DIR: '${{ github.workspace }}\numba-cache'
+      TORCH_VARIANT: "${{ inputs.acceleration || 'cpu' }}"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        if: inputs.repackage_run == ''
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: 'requirements*.txt'
+      - name: Install pinned runtime and test dependencies
+        if: inputs.repackage_run == ''
+        run: |
+          if ($env:TORCH_VARIANT -notin @('cpu','cu124')) { throw 'Unsupported runtime variant' }
+          python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url "https://download.pytorch.org/whl/$env:TORCH_VARIANT"
+          python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
+          python -m pip check
+      - name: Run Windows backend regressions
+        if: inputs.repackage_run == ''
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress
+          python -m pytest -q --junitxml=backend-test-report.xml > backend-tests.log 2>&1
+          $result = $LASTEXITCODE
+          Get-Content backend-tests.log
+          exit $result
+      - name: Build bundled Python desktop app
+        if: inputs.repackage_run == ''
+        run: python -m PyInstaller --noconfirm --clean packaging/family-voice.spec
+      - name: Reuse verified identical application for installer-only changes
+        if: inputs.repackage_run != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPACKAGE_RUN: ${{ inputs.repackage_run }}
+        run: |
+          if ($env:TORCH_VARIANT -notin @('cpu','cu124')) { throw 'Unsupported runtime variant' }
+          if ($env:REPACKAGE_RUN -notmatch '^[0-9]+$') { throw 'Invalid reuse run' }
+          $run = gh run view $env:REPACKAGE_RUN --json conclusion,status,workflowName,headSha | ConvertFrom-Json
+          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.workflowName -ne 'Windows desktop installer') { throw 'Reuse build is not verified' }
+          git fetch origin $run.headSha --depth=1
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify prior source' }
+          git diff --exit-code $run.headSha HEAD -- studio 'requirements*.txt' scripts/desktop_entry.py packaging/family-voice.spec docs/THIRD-PARTY-NOTICES.md
+          if ($LASTEXITCODE -ne 0) { throw 'Application changed; a fresh application build is required' }
+          gh run download $env:REPACKAGE_RUN --name Family-AI-Voice-Cloner-Pro-Windows-Candidate --dir previous
+          if ($LASTEXITCODE -ne 0) { throw 'Verified artifact download failed' }
+          $previousReport = Get-Content (Get-ChildItem previous -Recurse -Filter 'neural-report.json').FullName -Raw | ConvertFrom-Json
+          $expectedCuda = if ($env:TORCH_VARIANT -eq 'cu124') { '12.4' } else { $null }
+          if ($previousReport.runtime.torch_cuda -ne $expectedCuda) { throw 'Verified application runtime does not match the requested variant' }
+          $previousInstaller = (Get-ChildItem previous -Recurse -Filter '*Setup.exe').FullName
+          $previousDir = Join-Path $env:RUNNER_TEMP 'verified-family-app'
+          & ./scripts/windows-process-check.ps1 -Exe $previousInstaller -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$previousDir`"")
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $previousDir dist/FamilyVoiceCloner -Recurse
+          Remove-Item dist/FamilyVoiceCloner/unins* -Force
+          & ./scripts/windows-process-check.ps1 -Exe "$previousDir/unins000.exe" -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 300
+      - name: Validate frozen runtime and audio
+        shell: pwsh
+        run: |
+          & ./scripts/windows-process-check.ps1 -Exe dist/FamilyVoiceCloner/FamilyVoiceCloner.exe -Arguments @('--self-test', 'frozen-report.json') -TimeoutSeconds 300
+          if (!(Test-Path frozen-report.json)) { throw 'Missing current frozen report' }
+          Get-Content frozen-report.json
+      - name: Package genuine Windows installer
+        shell: pwsh
+        run: |
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DRuntimeVariant=$env:TORCH_VARIANT" packaging/windows-installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+      - name: Install exact artifact and verify installer runtime check
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem dist/installer/*Setup.exe).FullName
+          & ./scripts/windows-process-check.ps1 -Exe $installer -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=installer-test.log')
+          if (!(Select-String -Path installer-test.log -SimpleMatch 'Installed Python/backend/reference upload/WAV/MP3 verification passed.')) { throw 'Installer did not verify its bundled runtime' }
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          if (!(Test-Path $exe)) { throw 'Installed app is missing' }
+      - name: Validate installed backend, Recovery and audio
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--self-test', 'installed-report.json') -TimeoutSeconds 300
+          if (!(Test-Path installed-report.json)) { throw 'Installed runtime report is missing' }
+      - name: Validate installed native embedded UI
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--smoke-test', 'desktop-report.json') -TimeoutSeconds 180
+          if (!(Test-Path desktop-report.json)) { throw 'Native window report is missing' }
+      - name: Capture actual Windows interface pixels
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          & ./scripts/windows-ui-check.ps1 -Exe $exe -Report visual-report.json -Screenshot desktop-report.png
+      - name: Validate installed real models and eight-sentence story
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--model-test', 'neural-report.json') -TimeoutSeconds 1800
+          if (!(Test-Path neural-report.json)) { throw 'Installed real model report is missing' }
+      - name: Verify repair preserves user data
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem dist/installer/*Setup.exe).FullName
+          New-Item -ItemType Directory -Force $env:VCR_DATA_DIR | Out-Null
+          Set-Content "$env:VCR_DATA_DIR\preserve-me.txt" 'recordings must survive'
+          & ./scripts/windows-process-check.ps1 -Exe $installer -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=repair-test.log')
+          if (!(Test-Path "$env:VCR_DATA_DIR\preserve-me.txt")) { throw 'Update removed user data' }
+      - name: Verify uninstall preserves user data
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\unins000.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 300
+          if (!(Test-Path "$env:VCR_DATA_DIR\preserve-me.txt")) { throw 'Uninstall removed user data' }
+      - name: Source archive and checksums
+        shell: pwsh
+        run: |
+          git archive --format=zip --output=dist/installer/Family-AI-Voice-Cloner-Pro-Source.zip HEAD
+          Get-ChildItem dist/installer/* | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } | Set-Content dist/installer/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: Family-AI-Voice-Cloner-Pro-Windows-Candidate
+          path: |
+            dist/installer/
+            *report.json
+            desktop-report.png
+            installer-test.log
+      - name: Expose packaged startup diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($path in @('installer-test.log', 'repair-test.log', 'test-data/logs/desktop.log', 'test-data/logs/runtime.log')) {
+            if (Test-Path $path) {
+              $message = ((Get-Content $path -Tail 35) -join '%0A') -replace '(https?://[^ ?]+)\?[^ \r\n]+', '$1?[redacted]'
+              Write-Output "::error title=Packaged diagnostics ($path)::$message"
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: Windows-build-diagnostics
+          path: |
+            *report.json
+            *report.png
+            *.log
+            backend-test-report.xml
+            test-data/logs/
+
+  verify-bundled-runtime:
+    if: github.event_name == 'workflow_dispatch' && inputs.verified_build_run != ''
+    runs-on: windows-2022
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN: ${{ inputs.verified_build_run }}
+      VCR_DATA_DIR: '${{ github.workspace }}\isolated-runtime-data'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install verified artifact and run with system-only search path
+        shell: pwsh
+        run: |
+          if ($env:BUILD_RUN -notmatch '^[0-9]+$') { throw 'Invalid build run' }
+          $run = gh run view $env:BUILD_RUN --json conclusion,status,workflowName | ConvertFrom-Json
+          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.workflowName -ne 'Windows desktop installer') { throw 'Build is not verified' }
+          gh run download $env:BUILD_RUN --name Family-AI-Voice-Cloner-Pro-Windows-Candidate --dir candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
+          $installer = (Get-ChildItem candidate -Recurse -Filter '*Setup.exe').FullName
+          $env:PATH = "$env:SYSTEMROOT\System32;$env:SYSTEMROOT"
+          & ./scripts/windows-process-check.ps1 -Exe $installer -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+          $exe = "$env:LOCALAPPDATA\Programs\Family AI Voice Cloner Pro\FamilyVoiceCloner.exe"
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--self-test', 'isolated-runtime-report.json') -TimeoutSeconds 300
+          if (!(Test-Path isolated-runtime-report.json)) { throw 'Bundled runtime report missing' }
+          & ./scripts/windows-process-check.ps1 -Exe $exe -Arguments @('--smoke-test', 'isolated-desktop-report.json') -TimeoutSeconds 180
+          if (!(Test-Path isolated-desktop-report.json)) { throw 'Native window report missing with isolated PATH' }
+          & ./scripts/windows-ui-check.ps1 -Exe $exe -Report isolated-visual-report.json -Screenshot isolated-desktop-report.png
+          Get-Content isolated-runtime-report.json
+          Get-Content isolated-desktop-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Isolated-Windows-runtime-verification
+          path: |
+            isolated-*-report.json
+            isolated-*-report.png
+            isolated-runtime-data/logs/
+
+  publish-verified-candidate:
+    needs: verify-bundled-runtime
+    if: github.event_name == 'workflow_dispatch' && inputs.verified_build_run != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN: ${{ inputs.verified_build_run }}
+    steps:
+      - name: Verify run and publish its exact artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          publication_failure() {
+            set +e
+            message=$(tail -n 15 /tmp/publish-output.log | sed -E 's#(https?://[^ ?]+)\?[^ ]+#\1?[redacted]#g')
+            message="${message//%/%25}"
+            message="${message//$'\n'/%0A}"
+            echo "::error title=Publication diagnostics::$message"
+            exit 1
+          }
+          trap publication_failure ERR
+          exec > >(tee /tmp/publish-output.log) 2>&1
+          [[ "$BUILD_RUN" =~ ^[0-9]+$ ]] || exit 1
+          gh run view "$BUILD_RUN" --json conclusion,status,headSha,workflowName > build.json
+          jq -e '.status == "completed" and .conclusion == "success" and .workflowName == "Windows desktop installer"' build.json
+          revision=$(jq -r '.headSha' build.json)
+          gh run download "$BUILD_RUN" --name Family-AI-Voice-Cloner-Pro-Windows-Candidate --dir candidate
+          gh run download "$GITHUB_RUN_ID" --name Isolated-Windows-runtime-verification --dir isolated
+          visual_report=$(find isolated -name 'isolated-visual-report.json' -print -quit)
+          test -n "$visual_report"
+          jq -e '.native_window == true and .real_desktop_pixels == true and .blue_pixels >= 25 and .bright_pixels >= 20' "$visual_report"
+          visual_png=$(find isolated -name 'isolated-desktop-report.png' -print -quit)
+          test -n "$visual_png"
+          cp "$visual_png" "$(find candidate -name 'desktop-report.png' -print -quit)"
+          cp "$visual_report" candidate/visual-report.json
+          neural_report=$(find candidate -name 'neural-report.json' -print -quit)
+          test -n "$neural_report"
+          jq -e '.models | length == 2 and all(.real_neural_synthesis == true and .reference_conditioning == true and .wav_mp3_decode == true)' "$neural_report"
+          jq -e '.story | .real_neural_story and .independent_reference_routing and .sentence_regeneration and .short_preview and .wav_mp3_decode and .captions and .history_and_reopen' "$neural_report"
+          jq -e '.story | .story_sentences == 8 and .story_chapters == 2 and .reference_recovery == true and (.speaker_encoder_comparison.cosine >= -1 and .speaker_encoder_comparison.cosine <= 1)' "$neural_report"
+          installer=$(find candidate -name '*Setup.exe' -print -quit)
+          source_zip=$(find candidate -name '*Source.zip' -print -quit)
+          test -n "$installer"
+          test -n "$source_zip"
+          variant=$(jq -r '.runtime.torch_cuda // "cpu"' "$neural_report")
+          suffix=""
+          if [[ "$variant" != "cpu" ]]; then suffix="-cuda"; fi
+          tag="desktop-preview-${revision:0:12}${suffix}"
+          cat > notes.md <<'NOTES'
+          Python Windows desktop preview with bundled runtime, local Chatterbox Original/Turbo, family profiles, recording/editing, per-person controls, story/project workflows, timeline, persistent queue and WAV/MP3 export.
+
+          This exact installer passed Windows backend regressions, frozen and installed runtime checks, native window launch, genuine Original/Turbo CPU speech generation with AI-generated test references, update and uninstall data-preservation checks on a hosted Windows runner. A separate installed-app check also passed with a system-only search path, without Python or FFmpeg on PATH.
+
+          The installed application also generated a real two-speaker story, a short preview and a replacement sentence, preserving the other clip and earlier audio. Story WAV/MP3 decoding, timed captions, history and reopening passed. This version adds recoverable recordings/profiles, EBU volume leveling, visible short previews, delivery presets, local speaker-encoder comparisons and separate real Turbo/Original generation modes.
+
+          Preview limitations: unsigned build; a clean consumer Windows PC, physical microphone, RTX 2060/CUDA and personal family-voice similarity are not certified. The complete 46-feature master specification is not fully accepted; see docs/FEATURE-VERIFICATION.md in the matching source ZIP. Models are downloaded separately after confirmation in the app. Use only recordings you have permission to clone.
+          NOTES
+          printf '\nBundled PyTorch CUDA runtime: `%s` (cpu means CPU-only). GPU hardware testing is unrun.\n' "$variant" >> notes.md
+          if [[ "$variant" != "cpu" ]]; then
+            printf '\nCUDA installation: download the CUDA Setup.exe and every matching .bin file into the same folder, then open Setup.exe. The data files are split to fit GitHub download limits; do not open the .bin files separately.\n' >> notes.md
+          fi
+          printf '\nVerified build: https://github.com/%s/actions/runs/%s\nSource revision: `%s`\n' "$GH_REPO" "$BUILD_RUN" "$revision" >> notes.md
+          if ! gh release view "$tag" --json isDraft > draft.json; then
+            gh release create "$tag" --target "$revision" --title 'Family AI Voice Cloner Pro — Windows desktop preview' --notes-file notes.md --draft --prerelease
+            gh release view "$tag" --json isDraft > draft.json
+          fi
+          jq -e '.isDraft == true' draft.json
+          mapfile -t files < <(find candidate -type f \( -name '*Setup.exe' -o -name '*Setup-*.bin' -o -name '*Source.zip' -o -name 'SHA256SUMS.txt' -o -name '*report.json' -o -name 'desktop-report.png' \))
+          for file in "${files[@]}"; do
+            if (( $(stat -c%s "$file") >= 2147483648 )); then
+              echo "Release file exceeds GitHub's 2 GiB limit: $(basename "$file")"
+              exit 1
+            fi
+          done
+          gh release upload "$tag" "${files[@]}" --clobber
+          gh release edit "$tag" --draft=false

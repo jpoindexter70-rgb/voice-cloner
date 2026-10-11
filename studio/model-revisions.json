@@ -1,0 +1,56 @@
+{
+  "chatterbox": {
+    "repository": "ResembleAI/chatterbox",
+    "revision": "5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18",
+    "files": {
+      "conds.pt": {
+        "sha256": "6552d70568833628ba019c6b03459e77fe71ca197d5c560cef9411bee9d87f4e"
+      },
+      "s3gen.safetensors": {
+        "sha256": "2b78103c654207393955e4900aac14a12de8ef25f4b09424f1ef91941f161d4e"
+      },
+      "t3_cfg.safetensors": {
+        "sha256": "914cb1696f47527fe8852ca8f1fe1fa63cb34f76f9c715e84e067b744dd0da81"
+      },
+      "tokenizer.json": {
+        "git_blob_sha1": "abd07c710243ba89bf1b21780e7c37ddde92334e"
+      },
+      "ve.safetensors": {
+        "sha256": "f0921cab452fa278bc25cd23ffd59d36f816d7dc5181dd1bef9751a7fb61f63c"
+      }
+    }
+  },
+  "turbo": {
+    "repository": "ResembleAI/chatterbox-turbo",
+    "revision": "749d1c1a46eb10492095d68fbcf55691ccf137cd",
+    "files": {
+      "added_tokens.json": {
+        "git_blob_sha1": "fd85325cdfafc690469b6f0e8aeb5cf4649c1450"
+      },
+      "conds.pt": {
+        "sha256": "b1852099306fd6a7814eb9d0bd10186caba7249596cc23868f78a0eefbfa5033"
+      },
+      "merges.txt": {
+        "git_blob_sha1": "226b0752cac7789c48f0cb3ec53eda48b7be36cc"
+      },
+      "s3gen_meanflow.safetensors": {
+        "sha256": "d65cb687a2ed581ee6cc297e919ffefa63386944f42364ae13b78a594945514f"
+      },
+      "special_tokens_map.json": {
+        "git_blob_sha1": "b2d2dbc845800c78fe98656af927d831ab4ff7b7"
+      },
+      "t3_turbo_v1.safetensors": {
+        "sha256": "fcf1f8c1d651bb7e3acd69ee5be269b4ac10c02980b7708213d598bc9f7cdf87"
+      },
+      "tokenizer_config.json": {
+        "git_blob_sha1": "58bc759ea7dab3dd5442f0500e493f170eeba67f"
+      },
+      "ve.safetensors": {
+        "sha256": "f0921cab452fa278bc25cd23ffd59d36f816d7dc5181dd1bef9751a7fb61f63c"
+      },
+      "vocab.json": {
+        "git_blob_sha1": "a15dd0028acd1dd2c1c2394c80e1de8f3f12a0e4"
+      }
+    }
+  }
+}

@@ -5,6 +5,16 @@ let recorder, stream, context, analyser, animation, timerHandle, startedAt, paus
 let recordedBlob, recordedUrl, chunks = [], recordingMime;
 const titles = {dashboard:'Dashboard',myvoice:'My Voice',recorder:'Voice Recorder',generate:'Generate Speech',library:'Voice Library',editor:'Audio Editor',settings:'Settings',engine:'Engine Status'};
 const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const guidedScripts = {
+  natural: ['This is my natural speaking voice. I am recording in a quiet room, at a comfortable pace. Today I am testing how faithfully my voice can be reproduced. Every voice has its own rhythm, and this is mine.', 'Use your everyday voice. Record 10–30 seconds without music or another person speaking.'],
+  story: ['On a bright Saturday morning, our family set off on a little adventure. We followed the winding path past the old oak tree. What would we discover next? A bird sang overhead, and everyone stopped to listen.', 'Use a comfortable storytelling voice. Keep the same distance from the microphone throughout.'],
+  clear: ['Please meet me at the library on Thursday at half past three. We need seven apples, two notebooks, and a blue umbrella. My name is important to me, so I say it clearly. The journey is twelve miles long.', 'Speak clearly at your normal pace. Add family names you want the model to learn from your sample.'],
+  bedtime: ['The house grew quiet as the evening settled in. Outside, the moon shone softly through the trees. A little fox curled up in its warm den, closed its eyes, and dreamed of a peaceful morning.', 'Speak gently with a clear, audible voice. Avoid whispering; a clean normal-voice reference is more reliable.']
+};
+function displayGuidedScript(){const script=guidedScripts[$('guided-script').value];$('guided-script-text').textContent=script[0];$('guided-script-tip').textContent=script[1];}
+$('guided-script').addEventListener('change',displayGuidedScript);
+$('guided-script-next').addEventListener('click',()=>{const select=$('guided-script');select.selectedIndex=(select.selectedIndex+1)%select.options.length;displayGuidedScript();});
+displayGuidedScript();
 function notify(message, error = false) { $('notice').textContent = message; $('notice').className = error ? 'error' : ''; $('notice').hidden = false; }
 async function api(path, options = {}) {
   const headers = {'X-VCR-Token':token, ...options.headers};
@@ -52,7 +62,7 @@ async function refresh() {
   $('engine-controls-note').textContent = turbo ? 'Turbo does not support CFG or expression exaggeration; these controls are disabled. Turbo accepts tags such as [laugh] in your script.' : 'Original Chatterbox exposes CFG and expression. Changes may affect identity and pace.';
   renderAssets($('recent-assets'),assets.slice(0,5));
   renderAssets($('my-references'),assets.filter(a=>a.profile_id==='my-voice' && a.kind==='reference'));
-  renderProfiles(); await engineSummary(); await renderReviews();
+  renderProfiles(); await engineSummary(); await renderReviews(); window.dispatchEvent(new Event('studio-refresh'));
 }
 function renderAssets(container, list) {
   container.replaceChildren();
@@ -67,7 +77,7 @@ function renderAssets(container, list) {
     button('Edit',()=>{ $('edit-asset').value=asset.id; show('editor'); });
     if (asset.kind==='generated') button('Compare',()=>showResult(asset));
     ['wav','mp3'].forEach(format=>{ const a=document.createElement('a'); a.className='button secondary'; a.href=`/api/assets/${asset.id}/export/${format}`; a.download=''; a.textContent=format.toUpperCase(); actions.append(a); });
-    button('Delete',async()=>{ if(await confirmDelete('Delete this recording and its evaluations from active local storage? Exports and backups are separate.')) { await api(`/assets/${asset.id}`,{method:'DELETE'}); await refresh(); notify('Recording deleted.'); } });
+    button('Delete',async()=>{ if(await confirmDelete('Move this recording to Recovery? You can restore it from the Recording Library.')) { await api(`/assets/${asset.id}`,{method:'DELETE'}); await refresh(); notify('Recording moved to Recovery.'); } });
     container.append(row);
   });
 }
@@ -76,12 +86,17 @@ function renderProfiles() {
   profiles.forEach(profile=>{
     const card=document.createElement('article'); card.className='card';
     card.innerHTML=`<div class="card-title"><h2>${escapeText(profile.name)}</h2><span class="badge">${profile.id==='my-voice'?'DEFAULT':profile.kind.toUpperCase()}</span></div><p class="footnote">${escapeText(profile.authorization)} · Created ${escapeText(new Date(profile.created).toLocaleDateString())}</p><div class="actions"></div><div class="profile-assets"></div>`;
+    if(profile.details?.picture){const img=document.createElement('img');img.src=profile.details.picture;img.alt=profile.name+' profile picture';img.width=72;img.height=72;card.querySelector('.card-title').prepend(img);}
     const actions=card.querySelector('.actions');
     const addButton=(label,action,danger=false)=>{const b=document.createElement('button');b.textContent=label;b.className=danger?'danger':'secondary';b.addEventListener('click',protect(action));actions.append(b);};
     addButton('Test voice',()=>{$('generate-profile').value=profile.id;show('generate');});
     addButton('Record',()=>{$('record-profile').value=profile.id;show('recorder');});
     addButton('Rename',async()=>{const name=prompt('New profile name',profile.name);if(name?.trim()){await api(`/profiles/${profile.id}`,{method:'PATCH',body:{name:name.trim()}});await refresh();}});
-    addButton(profile.id==='my-voice'?'Clear My Voice data':'Delete profile',async()=>{if(await confirmDelete(`Delete all active recordings, generated clips, and evaluations for ${profile.name}? ${profile.id==='my-voice'?'The empty default profile remains.':''} Exports and backups are separate.`)){await api(`/profiles/${profile.id}`,{method:'DELETE'});await refresh();notify('Profile data deleted.');}},true);
+    const edit=document.createElement('form');edit.hidden=true;
+    edit.innerHTML=`<h3>Edit profile</h3><div class="form-grid"><label>Name<input class="detail-name" maxlength="80" required value="${escapeText(profile.name)}"></label><label>Preferred language<select class="detail-language"><option value="en">English</option></select></label><label>Reference accent notes<input class="detail-accent" maxlength="200" value="${escapeText(profile.details?.accent_notes||'')}"></label><label>Profile picture<input class="detail-picture" type="file" accept="image/png"></label></div><label class="checkbox"><input class="detail-remove-picture" type="checkbox">Remove profile picture</label><p class="footnote">These models support English. Accent comes from the speaker’s reference; notes organize samples and do not change synthesis. Pictures remain on this computer.</p><button class="secondary">Save profile</button>`;
+    addButton('Edit profile',()=>{edit.hidden=!edit.hidden;});
+    edit.addEventListener('submit',protect(async event=>{event.preventDefault();let picture=profile.details?.picture||'';const file=edit.querySelector('.detail-picture').files[0];if(file){if(file.size>280000)throw new Error('Use a PNG picture smaller than 280 KB.');picture=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Unable to read the picture.'));reader.readAsDataURL(file);});}if(edit.querySelector('.detail-remove-picture').checked)picture='';await api(`/profiles/${profile.id}`,{method:'PATCH',body:{name:edit.querySelector('.detail-name').value,language:'en',accent_notes:edit.querySelector('.detail-accent').value,picture}});await refresh();notify('Profile details saved locally.');}));card.append(edit);
+    addButton(profile.id==='my-voice'?'Clear My Voice data':'Delete profile',async()=>{if(await confirmDelete(`Delete all active recordings, generated clips, and evaluations for ${profile.name}? ${profile.id==='my-voice'?'The empty default profile remains.':''} Exports and backups are separate.`)){await api(`/profiles/${profile.id}`,{method:'DELETE'});await refresh();notify('Profile moved to Recovery.');}},true);
     const form=document.createElement('form');
     form.innerHTML='<label>Add reference recording<input type="file" accept="audio/*" required></label><label class="checkbox"><input type="checkbox" required> I have authorization to store this speaker’s audio.</label><button class="secondary">Upload reference</button>';
     form.addEventListener('submit',protect(async event=>{event.preventDefault();const file=form.querySelector('[type=file]').files[0];const check=form.querySelector('[type=checkbox]').checked;await uploadReference(profile.id,file,check);await refresh();}));
@@ -100,10 +115,11 @@ $('settings-form').addEventListener('submit',protect(async event=>{event.prevent
 ['temperature','exaggeration','cfg'].forEach(id=>$(id).addEventListener('input',()=>$(id+'-value').textContent=$(id).value));
 $('test-my-voice').addEventListener('click',()=>{$('generate-profile').value='my-voice';});
 $('script').addEventListener('input',()=>$('char-count').textContent=`${$('script').value.length.toLocaleString()} / 20,000`);
-async function generate() {
+async function generate(preview=false) {
   if(currentJob)throw new Error('Generation is already running.');
-  const result=await api('/generate',{method:'POST',body:{profile_id:$('generate-profile').value,text:$('script').value,temperature:Number($('temperature').value),exaggeration:Number($('exaggeration').value),cfg_weight:Number($('cfg').value),pause_ms:Number($('pause-ms').value)}});
-  currentJob=result.id;$('generate-button').disabled=true;$('cancel-generation').disabled=false;$('generation-progress').hidden=false;
+  const preferences=await api(`/profiles/${$('generate-profile').value}/preferences`);
+  const result=await api('/queue',{method:'POST',body:{profile_id:$('generate-profile').value,text:$('script').value,preview,controls:{...preferences.controls,temperature:Number($('temperature').value),exaggeration:Number($('exaggeration').value),cfg_weight:Number($('cfg').value),pause_ms:Number($('pause-ms').value)}}});
+  currentJob=result.id;$('preview-button').disabled=true;$('generate-button').disabled=true;$('cancel-generation').disabled=false;$('generation-progress').hidden=false;
   try {
     while(currentJob) {
       const job=await api(`/jobs/${currentJob}`);$('generation-progress').max=job.total;$('generation-progress').value=job.completed;
@@ -112,12 +128,12 @@ async function generate() {
       if(['failed','cancelled'].includes(job.status))throw new Error(job.error || job.status);
       await new Promise(resolve=>setTimeout(resolve,1000));
     }
-  } finally {currentJob=null;$('generate-button').disabled=false;$('cancel-generation').disabled=true;}
+  } finally {currentJob=null;$('preview-button').disabled=false;$('generate-button').disabled=false;$('cancel-generation').disabled=true;}
 }
-$('generate-button').addEventListener('click',protect(generate));$('regenerate').addEventListener('click',protect(generate));
-$('cancel-generation').addEventListener('click',protect(async()=>{if(currentJob){const response=await api(`/jobs/${currentJob}/cancel`,{method:'POST'});notify(response.notice);}}));
+$('generate-button').addEventListener('click',protect(()=>generate(false)));$('regenerate').addEventListener('click',protect(()=>generate(false)));$('preview-button').addEventListener('click',protect(()=>generate(true)));
+$('cancel-generation').addEventListener('click',protect(async()=>{if(currentJob){const response=await api(`/queue/${currentJob}/cancel`,{method:'POST'});notify(response.notice || "Cancellation requested; completed segments remain available for Resume.");}}));
 function showResult(asset) {
-  resultAsset=asset;$('generation-result').hidden=false;
+  resultAsset=asset;if($('speaker-comparison-result'))$('speaker-comparison-result').textContent='';$('generation-result').hidden=false;
   const reference=asset.metadata.reference_id || assets.find(a=>a.id===asset.metadata.source_asset)?.metadata.reference_id;
   const referenceAvailable=reference && assets.some(a=>a.id===reference);
   $('original-player').src=referenceAvailable?`/api/assets/${reference}/audio`:'';$('original-player').hidden=!referenceAvailable;
@@ -132,11 +148,11 @@ $('generated-replay').addEventListener('click',protect(async()=>{stopAudio($('ge
 $('review-form').addEventListener('submit',protect(async event=>{event.preventDefault();if(!resultAsset)return;const body={notes:$('review-notes').value};['similarity','naturalness','pronunciation','clarity','consistency'].forEach(key=>body[key]=Number($('rating-'+key).value));await api(`/assets/${resultAsset.id}/review`,{method:'POST',body});await renderReviews();notify('Your quality evaluation was saved.');}));
 async function renderReviews(){const reviews=await api('/reviews');$('reviews-list').replaceChildren();if(!reviews.length){$('reviews-list').innerHTML='<p class="empty">No evaluations yet. Compare generated and reference clips in Generate Speech.</p>';return;}reviews.forEach(r=>{const div=document.createElement('div');div.className='asset-row';const a=assets.find(a=>a.id===r.asset_id);div.innerHTML=`<div class="asset-info"><strong>${escapeText(a?.name || r.asset_id)}</strong><small>${escapeText(a?.metadata.engine)} · Similarity ${r.data.similarity}/5 · Naturalness ${r.data.naturalness}/5 · Pronunciation ${r.data.pronunciation}/5 · Clarity ${r.data.clarity}/5 · Consistency ${r.data.consistency}/5</small><p class="footnote">${escapeText(r.data.notes)}</p></div>`;$('reviews-list').append(div);});}
 $('export-reviews').addEventListener('click',protect(async()=>{const blob=new Blob([JSON.stringify({assets:assets.filter(a=>a.kind==='generated'),reviews:await api('/reviews')},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='voice-quality-evaluations.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}));
-function drawWave(canvas,peaks) {const ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);ctx.strokeStyle='#d4ed90';ctx.lineWidth=1.5;ctx.beginPath();peaks.forEach((peak,i)=>{const x=i/peaks.length*canvas.width;const height=Math.max(1,peak*canvas.height*.45);ctx.moveTo(x,canvas.height/2-height);ctx.lineTo(x,canvas.height/2+height);});ctx.stroke();}
-async function editorSelection(){const id=$('edit-asset').value;if(!id){$('edit-player').removeAttribute('src');drawWave($('edit-wave'),[]);return;}const wave=await api(`/assets/${id}/waveform`);drawWave($('edit-wave'),wave.peaks);$('trim-start').value=0;$('trim-end').value=wave.seconds.toFixed(3);$('edit-player').src=`/api/assets/${id}/audio`;$('edit-wav').href=`/api/assets/${id}/export/wav`;$('edit-mp3').href=`/api/assets/${id}/export/mp3`;}
+function drawWave(canvas,peaks) {const ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);ctx.strokeStyle='#79b8ff';ctx.lineWidth=1.5;ctx.beginPath();peaks.forEach((peak,i)=>{const x=i/peaks.length*canvas.width;const height=Math.max(1,peak*canvas.height*.45);ctx.moveTo(x,canvas.height/2-height);ctx.lineTo(x,canvas.height/2+height);});ctx.stroke();}
+async function editorSelection(){const id=$('edit-asset').value;if(!id){$('edit-player').removeAttribute('src');if($('edit-original-player')){$('edit-original-player').removeAttribute('src');$('edit-original-player').hidden=true;}drawWave($('edit-wave'),[]);return;}const wave=await api(`/assets/${id}/waveform`);drawWave($('edit-wave'),wave.peaks);$('trim-start').value=0;$('trim-end').value=wave.seconds.toFixed(3);$('edit-player').src=`/api/assets/${id}/audio`;const original=assets.find(a=>a.id===id)?.metadata.source_asset;const comparison=$('edit-original-player');if(comparison){comparison.hidden=!original||!assets.some(a=>a.id===original);if(!comparison.hidden)comparison.src=`/api/assets/${original}/audio`;else comparison.removeAttribute('src');}$('edit-wav').href=`/api/assets/${id}/export/wav`;$('edit-mp3').href=`/api/assets/${id}/export/mp3`;}
 $('edit-asset').addEventListener('change',protect(editorSelection));$('edit-stop').addEventListener('click',()=>stopAudio($('edit-player')));
-$('apply-edit').addEventListener('click',protect(async()=>{const id=$('edit-asset').value;if(!id)throw new Error('Choose a recording first.');$('apply-edit').disabled=true;try{const result=await api(`/assets/${id}/edit`,{method:'POST',body:{start:Number($('trim-start').value),end:Number($('trim-end').value),speed:Number($('edit-speed').value),pitch:Number($('edit-pitch').value),remove_silence:$('silence-remove').checked,denoise:$('denoise').checked}});await refresh();$('edit-asset').value=result.id;await editorSelection();notify('Edited copy saved; original unchanged. Select “Use reference” in the library if you want to use it for cloning.');}finally{$('apply-edit').disabled=false;}}));
-async function engineSummary(){const status=await api('/engine');const missing=status.models[settings.engine]?.missing || [];const ready=status.loaded===settings.engine;$('engine-badge').textContent=ready?'READY':missing.length?'MODEL MISSING':'NOT LOADED';$('engine-summary').textContent=!status.package_version?'Voice engine package is missing. Run Install or Repair.cmd.':missing.length?'Download the selected model using Download Models.cmd.':status.message;$('engine-message').textContent=status.message;}
+$('apply-edit').addEventListener('click',protect(async()=>{const id=$('edit-asset').value;if(!id)throw new Error('Choose a recording first.');$('apply-edit').disabled=true;try{const result=await api(`/assets/${id}/edit`,{method:'POST',body:{start:Number($('trim-start').value),end:Number($('trim-end').value),speed:Number($('edit-speed').value),pitch:Number($('edit-pitch').value),volume:Number($('edit-volume')?.value??1),normalize:$('edit-normalize')?.checked??false,level:$('edit-level')?.checked??false,remove_silence:$('silence-remove').checked,denoise:$('denoise').checked}});await refresh();$('edit-asset').value=result.id;await editorSelection();notify('Edited copy saved; original unchanged. Select “Use reference” in the library if you want to use it for cloning.');}finally{$('apply-edit').disabled=false;}}));
+async function engineSummary(){const status=await api('/engine');const missing=status.models[settings.engine]?.missing || [];const ready=status.loaded===settings.engine;$('engine-badge').textContent=ready?'READY':missing.length?'MODEL MISSING':'NOT LOADED';$('engine-summary').textContent=!status.package_version?'Voice engine package is missing. Reinstall the desktop application.':missing.length?'Open Local AI Engine Manager and download the selected model.':status.message;$('engine-message').textContent=status.message;}
 async function diagnostics(){const result=await api('/diagnostics');$('diagnostics').textContent=JSON.stringify(result,null,2);await engineSummary();}
 $('refresh-diagnostics').addEventListener('click',protect(diagnostics));
 $('load-engine').addEventListener('click',protect(async()=>{await api('/engine/load',{method:'POST'});$('load-engine').disabled=true;try{let status;do{await new Promise(resolve=>setTimeout(resolve,1000));status=await api('/engine');$('engine-message').textContent=status.message;}while(status.busy);await diagnostics();notify(status.message,status.loaded!==settings.engine);}finally{$('load-engine').disabled=false;}}));
@@ -154,6 +170,7 @@ $('record-start').addEventListener('click',protect(async()=>{
     stream=await getMicrophone();await listMicrophones();recordingProfile=$('record-profile').value;chunks=[];recordedBlob=null;$('record-save').disabled=true;$('record-preview').hidden=true;
     recordingMime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4'].find(type=>MediaRecorder.isTypeSupported(type));
     recorder=new MediaRecorder(stream,recordingMime?{mimeType:recordingMime}:{});
+    stream.getAudioTracks().forEach(track=>track.addEventListener('ended',()=>{notify('The microphone disconnected. Review and save the audio captured so far, then reconnect or choose another microphone.',true);if(recorder && recorder.state!=='inactive')recorder.stop();}));
     recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
     recorder.onerror=event=>{notify(event.error?.message || 'Microphone recording failed.',true);if(recorder.state!=='inactive')recorder.stop();};
     recorder.onstop=async()=>{

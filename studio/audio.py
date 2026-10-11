@@ -20,7 +20,7 @@ def decode(source, target):
     proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe',
                            '-format_whitelist', 'wav,mp3,flac,ogg,mov,matroska,webm,aac,aiff', '-i', str(source),
                            '-t', str(MAX_SECONDS + 1), '-vn', '-ac', '1', '-ar', '24000',
-                           '-c:a', 'pcm_s16le', str(target)], capture_output=True, timeout=120)
+                           '-c:a', 'pcm_s16le', str(target)], capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if proc.returncode:
         raise ValueError('Cannot decode this recording. Use WAV, MP3, FLAC, OGG, M4A, or browser WebM audio.')
     audio, sr = sf.read(target, dtype='float32')
@@ -46,8 +46,13 @@ def analyze(audio, sr):
         warnings.append('Clipping detected. Reduce microphone gain and record again.')
     if rms < .01:
         warnings.append('Very quiet audio. Move closer to the microphone or increase gain.')
+    windows = [audio[i:i + max(1, sr // 20)] for i in range(0, len(audio), max(1, sr // 20))]
+    quiet_rms = float(np.quantile([np.sqrt(np.mean(w ** 2)) for w in windows], .1))
+    if quiet_rms > .02:
+        warnings.append('The quietest passages are loud. Check for background noise or record pauses; continuous speech can also trigger this warning.')
     return {'seconds': round(seconds, 3), 'sample_rate': sr, 'peak_db': round(20 * np.log10(max(peak, 1e-9)), 1),
-            'rms_db': round(20 * np.log10(max(rms, 1e-9)), 1), 'clipped_fraction': clipped, 'warnings': warnings}
+            'rms_db': round(20 * np.log10(max(rms, 1e-9)), 1), 'clipped_fraction': clipped,
+            'quiet_floor_db': round(20 * np.log10(max(quiet_rms, 1e-9)), 1), 'warnings': warnings}
 
 
 def waveform(path, points=800):
@@ -56,7 +61,28 @@ def waveform(path, points=800):
     return {'peaks': [float(np.max(np.abs(g))) for g in groups], 'seconds': len(x) / sr}
 
 
-def edit(source, target, start, end, remove_silence, denoise, speed, pitch):
+def level_volume(source, target):
+    """EBU R128 loudness normalization with bounded dynamic leveling, via FFmpeg."""
+    x, sr = sf.read(source, dtype='float32')
+    if not len(x) or not np.isfinite(x).all():
+        raise ValueError('Volume leveling needs valid audio.')
+    if float(np.sqrt(np.mean(x ** 2))) < 1e-8:
+        # Some Windows FFmpeg loudnorm builds turn -infinity loudness into full-scale PCM.
+        # Silence has no measurable loudness to normalize; retain it without the filter.
+        sf.write(target, x, sr, subtype='PCM_16')
+        return analyze(x, sr)
+    proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-i', str(source),
+        '-af', 'loudnorm=I=-18:TP=-1.5:LRA=7', '-ar', '24000', '-ac', '1',
+        '-c:a', 'pcm_s16le', str(target)], capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if proc.returncode:
+        raise ValueError('Volume leveling failed: ' + proc.stderr.decode(errors='replace')[-500:])
+    x, sr = sf.read(target, dtype='float32')
+    if not len(x) or not np.isfinite(x).all():
+        raise ValueError('Volume leveling returned invalid audio.')
+    return analyze(x, sr)
+
+
+def edit(source, target, start, end, remove_silence, denoise, speed, pitch, volume=1, normalize=False, level=False):
     x, sr = sf.read(source, dtype='float32')
     duration = len(x) / sr
     end = duration if end is None else end
@@ -84,17 +110,38 @@ def edit(source, target, start, end, remove_silence, denoise, speed, pitch):
     sf.write(target, x, sr, subtype='PCM_16')
     if speed != 1 or pitch != 0:
         ratio = 2 ** (pitch / 12)
-        filters = f'asetrate={sr * ratio},aresample={sr},atempo={speed / ratio}'
+        tempo = speed / ratio
+        stages = []
+        while tempo < .5:
+            stages.append('atempo=0.5'); tempo /= .5
+        while tempo > 2:
+            stages.append('atempo=2'); tempo /= 2
+        stages.append(f'atempo={tempo}')
+        filters = f'asetrate={sr * ratio},aresample={sr},' + ','.join(stages)
         temp = target.with_name(uuid.uuid4().hex + '.wav')
         try:
             proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-i', str(target),
-                                   '-af', filters, str(temp)], capture_output=True, timeout=120)
+                                   '-af', filters, str(temp)], capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             if proc.returncode:
                 raise ValueError('FFmpeg could not apply pitch/speed processing.')
             temp.replace(target)
         finally:
             temp.unlink(missing_ok=True)
     x, sr = sf.read(target, dtype='float32')
+    if level:
+        leveled = target.with_name(uuid.uuid4().hex + '.wav')
+        try:
+            level_volume(target, leveled)
+            leveled.replace(target)
+            x, sr = sf.read(target, dtype='float32')
+        finally:
+            leveled.unlink(missing_ok=True)
+    if normalize:
+        peak = np.max(np.abs(x))
+        if peak > 0:
+            x = x * (.95 / peak)
+    x = np.clip(x * volume, -1, 1)
+    sf.write(target, x, sr, subtype='PCM_16')
     return analyze(x, sr)
 
 
@@ -102,6 +149,6 @@ def export_mp3(source, target, synthetic=False):
     proc = subprocess.run([ffmpeg(), '-nostdin', '-v', 'error', '-y', '-i', str(source),
                            '-c:a', 'libmp3lame', '-q:a', '2', '-metadata',
                            'comment=AI-GENERATED SYNTHETIC AUDIO; Voice Control Room' if synthetic else 'comment=Reference recording; Voice Control Room', str(target)],
-                          capture_output=True, timeout=120)
+                          capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if proc.returncode:
         raise ValueError('MP3 export failed. Run diagnostics to check FFmpeg.')

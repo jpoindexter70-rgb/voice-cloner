@@ -11,6 +11,11 @@ import shutil
 import tempfile
 import threading
 import uuid
+import logging
+import sqlite3
+import subprocess
+import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +42,9 @@ class ProfileIn(BaseModel):
 
 class RenameIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+    language: Literal['en'] = 'en'
+    accent_notes: str = Field(default='', max_length=200)
+    picture: str = Field(default='', max_length=400000)
 
 
 class SettingsIn(BaseModel):
@@ -60,6 +68,9 @@ class EditIn(BaseModel):
     denoise: bool = False
     speed: float = Field(default=1, ge=.5, le=2)
     pitch: float = Field(default=0, ge=-6, le=6)
+    volume: float = Field(default=1, ge=0, le=2)
+    normalize: bool = False
+    level: bool = False
 
 
 class ReviewIn(BaseModel):
@@ -91,7 +102,20 @@ def memory_status():
 
 
 def create_app(root=None):
-    app = FastAPI(title='Voice Control Room Advanced', docs_url=None, redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            queue = app.state.queue
+            queue.stop_event.set()
+            queue.wake.set()
+            if queue.thread:
+                queue.thread.join(timeout=15)
+            if not queue.thread or not queue.thread.is_alive():
+                with app.state.engine.lock:
+                    app.state.engine.unload()
+    app = FastAPI(title='Voice Control Room Advanced', docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', '[::1]', 'testserver'])
     store = Store(root or data_directory())
     engine = Engine(store.root / 'models')
@@ -131,6 +155,13 @@ def create_app(root=None):
     async def runtime(request, exc):
         return JSONResponse({'detail': str(exc)}, status_code=503)
 
+    async def system_error(request, exc):
+        logging.exception('Local operation failed: %s', request.url.path, exc_info=exc)
+        return JSONResponse({'detail': type(exc).__name__ + ': ' + str(exc)
+            + '. Your existing recordings were preserved. Check local diagnostics and logs.'}, status_code=500)
+    for error_type in (OSError, sqlite3.Error, subprocess.TimeoutExpired):
+        app.add_exception_handler(error_type, system_error)
+
     static = Path(__file__).parent / 'static'
     app.mount('/static', StaticFiles(directory=static), name='static')
 
@@ -167,7 +198,31 @@ def create_app(root=None):
     def rename(ident: str, body: RenameIn):
         if not body.name.strip():
             raise ValueError('Enter a profile name.')
+        details = store.profile(ident)['details']
+        picture = body.picture if 'picture' in body.model_fields_set else details.get('picture', '')
+        if picture:
+            import base64
+            import io
+            from PIL import Image
+            if not picture.startswith('data:image/png;base64,'):
+                raise ValueError('Use a PNG profile picture.')
+            try:
+                raw = base64.b64decode(picture.split(',', 1)[1], validate=True)
+                with Image.open(io.BytesIO(raw)) as image:
+                    if image.format != 'PNG' or max(image.size) > 1024:
+                        raise ValueError('Choose a picture no larger than 1024 pixels.')
+                    image.load()
+                    image = image.convert('RGB')
+                    image.thumbnail((256, 256))
+                    output = io.BytesIO()
+                    image.save(output, format='PNG')
+                picture = 'data:image/png;base64,' + base64.b64encode(output.getvalue()).decode('ascii')
+            except Exception as exc:
+                raise ValueError('The profile picture could not be decoded. Use a valid PNG up to 1024 pixels.') from exc
         store.rename(ident, body.name.strip())
+        store.save_profile_details(ident, {'language': body.language if 'language' in body.model_fields_set else details.get('language', 'en'),
+                                         'accent_notes': body.accent_notes.strip() if 'accent_notes' in body.model_fields_set else details.get('accent_notes', ''),
+                                         'picture': picture})
         return store.profile(ident)
 
     def idle():
@@ -182,7 +237,17 @@ def create_app(root=None):
             store.delete_profile(ident)
             with engine.lock:
                 engine.unload()
-        return {'deleted': True, 'notice': 'Active local recordings deleted. Separately remove any exported files and backups.'}
+        return {'deleted': True, 'notice': 'Profile moved to Recovery. Exported files and backups are separate.'}
+
+    @app.get('/api/recovery')
+    def recovery_items():
+        return store.recycle_items()
+
+    @app.post('/api/recovery/{ident}/restore')
+    def restore_deleted(ident: str):
+        with mutation_lock:
+            idle()
+            return store.restore_deleted(ident)
 
     @app.get('/api/assets')
     def assets(profile_id: str | None = None):
@@ -333,7 +398,7 @@ def create_app(root=None):
                 raise ValueError('Choose a reference with at least 6 seconds of clear speech.')
             chosen = store.settings()
             if engine.missing(chosen['engine']):
-                raise RuntimeError('Selected model is not installed. Run Download Models.cmd, then load the engine.')
+                raise RuntimeError('Selected model is not installed. Use Download or Repair in Local AI Engine Manager, then load the engine.')
             ident = uuid.uuid4().hex
             with jobs_lock:
                 # Bound memory retained for progress/history; assets remain on disk.
@@ -383,6 +448,25 @@ def create_app(root=None):
         store.review(ident, body.model_dump())
         return {'saved': True}
 
+    @app.post('/api/assets/{ident}/similarity')
+    def similarity(ident: str):
+        asset = store.asset(ident)
+        if asset['kind'] != 'generated' or not asset['metadata'].get('reference_id'):
+            raise ValueError('Choose generated speech with an available reference recording.')
+        reference = store.asset(asset['metadata']['reference_id'])
+        if reference['profile_id'] != asset['profile_id']:
+            raise ValueError('Reference does not belong to this speaker.')
+        with mutation_lock:
+            idle()
+            with engine.lock:
+                engine.load(asset['metadata']['engine'], store.settings()['device'])
+                return engine.compare_speakers(store.path(reference['id']), store.path(ident))
+
+    @app.get('/api/capabilities')
+    def model_capabilities():
+        from .capabilities import capabilities
+        return capabilities(store.settings()['engine'])
+
     @app.get('/api/reviews')
     def reviews():
         return store.reviews()
@@ -404,6 +488,25 @@ def create_app(root=None):
                     gpu.update(name=torch.cuda.get_device_name(0), vram_gb=round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2))
             except Exception as exc:
                 gpu['message'] = str(exc)
+        gpu['physical_devices'] = []
+        smi = shutil.which('nvidia-smi')
+        if not smi and os.name == 'nt':
+            candidate = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32' / 'nvidia-smi.exe'
+            if candidate.is_file():
+                smi = str(candidate)
+        if smi:
+            try:
+                result = subprocess.run([smi, '--query-gpu=name,memory.total,driver_version', '--format=csv,noheader,nounits'],
+                    capture_output=True, text=True, timeout=5, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                if result.returncode == 0:
+                    gpu['physical_devices'] = result.stdout.strip().splitlines()[:8]
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if not gpu.get('available'):
+            gpu['recommendation'] = ('NVIDIA GPU detected, but this PyTorch runtime cannot use CUDA. Use the CUDA installer and a compatible driver; Auto retains CPU fallback.'
+                if gpu['physical_devices'] else 'GPU acceleration unavailable in this runtime. Auto uses CPU.')
+        else:
+            gpu['recommendation'] = 'CUDA available. Run one model at a time; actual generation and memory fit require a hardware test.'
         try:
             ff = audio.ffmpeg()
         except Exception as exc:
@@ -412,11 +515,24 @@ def create_app(root=None):
                 'database': str(store.db), 'preserved_earlier_database': str(store.preserved_database) if store.preserved_database else None,
                 'packages': packages, 'gpu': gpu, 'ffmpeg': ff, 'engine': engine.status(),
                 'privacy': 'Inference is offline. No cloud audio uploads. Bound to loopback by launcher.',
-                'repair': 'Close the studio and run Install or Repair.cmd. This preserves the data directory. Download Models.cmd repairs model files.',
+                'repair': 'Use Local AI Engine Manager to download or repair models. Reinstall the desktop application to repair its bundled runtime. Back up family data in Settings and Diagnostics first.',
                 'memory': memory_status(),
                 'unindexed_recordings': len([p for p in store.audio.glob('*.wav') if p.stem not in {a['id'] for a in store.assets()}]),
                 'missing_recordings': [a['id'] for a in store.assets() if not store.path(a['id']).is_file()],
-                'microphone': 'Browser permission and device test are available in Voice Recorder; cannot be inspected by the server.'}
+                'microphone': 'Microphone permission and a live device test are available in Record Voice.'}
+
+    @app.get('/api/diagnostic-logs')
+    def diagnostic_logs():
+        records = []
+        for name in ('desktop.log', 'desktop.log.1', 'desktop.log.2'):
+            path = store.root / 'logs' / name
+            if not path.is_file() or not path.resolve().is_relative_to(store.root.resolve()):
+                continue
+            with path.open('rb') as source:
+                source.seek(max(0, path.stat().st_size - 65536))
+                content = source.read(65536).decode('utf-8', errors='replace')
+            records.append({'name': name, 'text': '\n'.join(content.splitlines()[-200:])})
+        return {'logs': records, 'notice': 'Local diagnostic logs; review personal details before sharing. No logs recorded yet.' if not records else 'Local diagnostic logs; review personal details before sharing.'}
 
     @app.post('/api/shutdown')
     def shutdown():
@@ -425,5 +541,78 @@ def create_app(root=None):
             if app.state.shutdown:
                 app.state.shutdown()
         return {'stopping': True}
+
+    from .workflows import register_workflows
+    register_workflows(app, store, engine, jobs, jobs_lock, mutation_lock, idle, GenerationIn)
+
+    @app.get('/api/engine/operation')
+    def operation():
+        return getattr(app.state, 'model_operation', {'status': 'idle', 'message': ''})
+
+    @app.post('/api/engine/download/{name}')
+    def download_model(name: str):
+        from .engine import MODELS
+        if name not in MODELS:
+            raise ValueError('Choose Chatterbox Original or Turbo.')
+        with mutation_lock:
+            idle()
+            if not engine.lock.acquire(blocking=False):
+                raise HTTPException(409, 'Engine busy.')
+            app.state.model_operation = {'status': 'downloading', 'message': 'Contacting official model repository…'}
+            def download():
+                try:
+                    from .cli import download, verify
+                    engine.unload()
+                    download(name, progress=lambda text: setattr(app.state, 'model_operation',
+                             {'status': 'downloading', 'message': text}))
+                    verify(name)
+                    app.state.model_operation = {'status': 'complete', 'message': 'Model downloaded and integrity verified. Select Load engine.'}
+                except Exception as exc:
+                    app.state.model_operation = {'status': 'failed', 'message': str(exc)}
+                    engine.message = str(exc)
+                finally:
+                    try:
+                        os.environ['HF_HUB_OFFLINE'] = '1'
+                        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+                        from huggingface_hub import constants as hub_constants
+                        hub_constants.HF_HUB_OFFLINE = True
+                    finally:
+                        engine.lock.release()
+            threading.Thread(target=download, name='model-download', daemon=True).start()
+        return {'status': 'downloading'}
+
+    @app.post('/api/engine/stop')
+    def stop_engine():
+        with mutation_lock:
+            idle()
+            with engine.lock:
+                engine.unload()
+                engine.auto_cpu_fallback = False
+                engine.message = 'Engine stopped. Recordings and models remain saved.'
+        return engine.status()
+
+    @app.post('/api/engine/import/{name}')
+    def import_model(name: str, file: UploadFile = File(...)):
+        from .model_archive import import_archive
+        with mutation_lock:
+            idle()
+            with engine.lock, tempfile.TemporaryDirectory(prefix='family-model-upload-') as directory:
+                archive = Path(directory) / 'model.zip'
+                try:
+                    count = 0
+                    with archive.open('wb') as out:
+                        while chunk := file.file.read(4 * 1024 * 1024):
+                            count += len(chunk)
+                            if count > 8 * 1024**3:
+                                raise ValueError('Model ZIP exceeds the 8 GB limit.')
+                            out.write(chunk)
+                    engine.unload()
+                    result = import_archive(archive, engine.model_path(name), name)
+                    engine.message = 'Official model imported and verified. Load the engine to begin.'
+                    return result
+                except (json.JSONDecodeError, zipfile.BadZipFile, KeyError) as exc:
+                    raise ValueError('Invalid model archive.') from exc
+                finally:
+                    file.file.close()
 
     return app

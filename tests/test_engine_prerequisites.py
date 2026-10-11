@@ -42,3 +42,9 @@ def test_installer_model_load_failure_is_not_reported_as_success(tmp_path, monke
     monkeypatch.setenv('VCR_DATA_DIR', str(tmp_path))
     with pytest.raises(RuntimeError, match='model files missing'):
         cli.check_runtime(load_models=True)
+
+
+def test_turbo_uses_upstream_gpt2_tokenizer_files_without_fast_tokenizer_json():
+    from studio.engine import MODELS
+    assert {'vocab.json','merges.txt','tokenizer_config.json'} <= set(MODELS['turbo']['files'])
+    assert 'tokenizer.json' not in MODELS['turbo']['files']

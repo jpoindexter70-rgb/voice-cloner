@@ -100,3 +100,21 @@ def test_incompatible_dedicated_database_stops_without_changing_either_file(tmp_
     with pytest.raises(RuntimeError, match='Both databases were preserved'):
         Store(tmp_path)
     assert all(path.read_bytes() == content for path, content in before.items())
+
+
+def test_connections_close_and_failed_transactions_rollback(tmp_path):
+    import sqlite3
+    import pytest
+    store = Store(tmp_path / 'closed-handles')
+    with store.connect() as connection:
+        connection.execute("INSERT INTO settings(key,value) VALUES ('closed-test','1')")
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute('SELECT 1')
+    with pytest.raises(RuntimeError):
+        with store.connect() as failed:
+            failed.execute("UPDATE settings SET value='2' WHERE key='closed-test'")
+            raise RuntimeError('Interrupted operation')
+    with pytest.raises(sqlite3.ProgrammingError):
+        failed.execute('SELECT 1')
+    with store.connect() as check:
+        assert check.execute("SELECT value FROM settings WHERE key='closed-test'").fetchone()[0] == '1'

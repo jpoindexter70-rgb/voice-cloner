@@ -1,0 +1,7 @@
+$('open-workspace').onclick=()=>view('workspace');$('open-live-status').onclick=async()=>{view('engine');await updateEngine()};
+for(const [buttonId,target] of [['jump-speech','script'],['jump-convert','convert-file'],['jump-adapt','adapt-steps'],['jump-live','live-block']])$(buttonId).onclick=()=>{$(target).scrollIntoView({behavior:'auto',block:'center'});$(target).focus()};
+let dashboardStamp='';setInterval(()=>{const stamp=JSON.stringify(profiles);if(stamp!==dashboardStamp){dashboardStamp=stamp;$('stat-profiles').textContent=profiles.length;$('stat-authorized').textContent=profiles.filter(p=>p.consent_status==='authorized').length;$('stat-generated').textContent=profiles.reduce((n,p)=>n+p.generated.length,0)}},500);
+api('/health').then(info=>{$('build-label').textContent=info.version?'Build '+info.version+' · Family + Live':'Server update required · restart the updated Studio'}).catch(e=>message(e.message));
+
+$('workspace-engine').onchange=async()=>{try{const p=chosen();await api('/profiles/'+p.id,json('PATCH',{...p.settings,name:p.name,language:p.language,accent:p.accent,engine:$('workspace-engine').value}));await refresh();message($('workspace-engine').value==='turbo'?'Chatterbox Turbo selected for speech generation.':'Expressive selected for speech generation.')}catch(e){message(e.message)}};
+setInterval(()=>{const p=profiles.find(p=>p.id===selected);$('workspace-engine').disabled=!p;if(p&&document.activeElement!==$('workspace-engine'))$('workspace-engine').value=p.settings.engine},500);

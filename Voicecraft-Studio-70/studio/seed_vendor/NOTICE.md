@@ -1,0 +1,3 @@
+Seed-VC source from Plachtaa/seed-vc, revision 51383efd921027683c89e5348211d93ff12ac2a8, GPL-3.0. Upstream copyright notices remain in each file. Studio modifications: namespaced imports; lazy optional DAC quantizer import; trusted verified checkpoint loading compatibility with PyTorch 2.6. Selected tiny XLSR/HiFT architecture only. Upstream GUI, model downloads, global environment changes and checkpoint deletion are not included.
+
+CAMPPlus and HiFT files retain their Apache-2.0 copyright/license headers; the full Apache-2.0 license is included in LICENSE-APACHE-2.0. Other source headers and the upstream GPL-3.0 distribution license are preserved.

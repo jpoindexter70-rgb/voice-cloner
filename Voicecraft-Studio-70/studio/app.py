@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from .backup import backup, restore
 from .persistence import PrivateProfileStore
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from .engine import VoiceEngine
 from .jobs import Jobs
 from .styles import STYLES
@@ -53,6 +53,16 @@ class Profile(BaseModel):
 
 
 class VoiceSettings(BaseModel):
+    quality_mode: str = Field(default='standard',pattern='^(standard|natural_studio)$')
+    pronunciations: dict[str,str] = Field(default_factory=dict,max_length=100)
+    sampling_seed: int | None = Field(default=None,ge=0,le=2147483647)
+
+    @field_validator('pronunciations')
+    @classmethod
+    def validate_pronunciations(cls,value):
+        if any(not k.strip() or len(k)>80 or not v.strip() or len(v)>160 for k,v in value.items()) or sum(len(k)+len(v) for k,v in value.items())>5000:raise ValueError('Use up to 100 pronunciation corrections: words up to 80 characters and spoken forms up to 160 characters, 5000 characters total.')
+        return value
+
     warmth: float = Field(default=0, ge=-6, le=6)
     brightness: float = Field(default=0, ge=-6, le=6)
     softness: float = Field(default=0, ge=0, le=100)
@@ -80,6 +90,13 @@ class Speech(BaseModel):
     settings: VoiceSettings | None = None
 
 
+class Candidates(Speech):
+    count: int = Field(default=2,ge=1,le=3)
+
+class SentenceRegeneration(BaseModel):
+    sentence: int = Field(ge=0,le=9999)
+
+
 class Rename(BaseModel):
     name: str = Field(min_length=1,max_length=120)
 
@@ -103,6 +120,12 @@ class AdaptationRequest(BaseModel):
 
 class BenchmarkRequest(BaseModel):
     block_seconds: float = Field(default=.5)
+
+class ReferenceCleaning(BaseModel):
+    start: float = Field(default=0,ge=0)
+    end: float = Field(gt=0,le=120)
+    denoise: bool = False
+
 
 class AudioEdit(BaseModel):
     warmth: float = Field(default=0, ge=-6, le=6)
@@ -273,7 +296,7 @@ def create_app(root=None, engine=None):
         profile = dict(id=identity, name=body.name.strip(), language=body.language, accent=body.accent,
                        minor=body.minor, authorization=body.authorization, created_at=datetime.now(timezone.utc).isoformat(),
                        consent_status='guardian_verification_pending' if body.minor else 'authorized',
-                       settings=VoiceSettings().model_dump(), recordings=[], generated=[], primary_reference=None, picture=False)
+                       settings=VoiceSettings(quality_mode='natural_studio').model_dump(), recordings=[], generated=[], primary_reference=None, picture=False)
         profile['consent_history'] = [{'event':'created','authorization':body.authorization,
                                       'date':profile['created_at'],'status':profile['consent_status']}]
         write(path, profile)
@@ -380,7 +403,7 @@ def create_app(root=None, engine=None):
         try:
             data, sr = audio_tools.decode(payload, root / 'temporary')
         except Exception:
-            raise HTTPException(400, 'Import valid WAV, FLAC, MP3, M4A or browser-recorded audio')
+            raise HTTPException(400, 'Import valid WAV, FLAC, MP3, M4A, MP4 with audio, or browser-recorded audio')
         if len(data) == 0 or not np.isfinite(data).all():
             raise HTTPException(400, 'Audio is empty or invalid')
         seconds = len(data) / sr
@@ -393,7 +416,10 @@ def create_app(root=None, engine=None):
         if rms < .01: warnings.append('Recording is quiet; move closer to the microphone.')
         if clipped > .001: warnings.append('Clipping detected; reduce microphone gain.')
         if seconds < 10: warnings.append('A clean 10–20 second reference is recommended.')
-        return (data, sr), {'seconds': round(seconds, 2), 'sample_rate': sr, 'rms': round(rms, 4),
+        from .reference_quality import evaluate
+        signal=evaluate(mono,sr)
+        warnings.extend(signal['warnings'])
+        return (data, sr), {'signal_checks':signal,'seconds': round(seconds, 2), 'sample_rate': sr, 'rms': round(rms, 4),
                              'clipped_fraction': round(clipped, 5), 'warnings': warnings,
                              'note': 'Signal checks only; this does not measure speech naturalness or speaker similarity.'}
 
@@ -421,6 +447,33 @@ def create_app(root=None, engine=None):
             write(folder(identity), profile)
         return profile
 
+    def reference_file(identity,asset):
+        person=read(identity);allowed(person)
+        if asset not in {r['id'] for r in person['recordings']}:raise HTTPException(404,'Reference does not belong to this profile')
+        return folder(identity)/'references'/asset
+
+    @app.get('/api/profiles/{identity}/references/{asset}/suggestions')
+    def reference_suggestions(identity: str,asset: str):
+        from .reference_quality import suggestions
+        values,sr=sf.read(reference_file(identity,asset),dtype='float32',always_2d=True)
+        return {'suggestions':suggestions(values,sr),'note':'Suggested sections use clipping and level checks, not speech recognition. Listen to confirm clean, natural speech in your own voice.'}
+
+    @app.post('/api/profiles/{identity}/references/{asset}/clean-preview')
+    def reference_clean_preview(identity: str,asset: str,body: ReferenceCleaning):
+        from .reference_quality import clean
+        values,sr=sf.read(reference_file(identity,asset),dtype='float32',always_2d=True)
+        duration=len(values)/sr
+        if body.end<=body.start or body.end>duration+.01 or not 5.1<=body.end-body.start<=20:raise HTTPException(400,'Choose a clean section between 5.1 and 20 seconds.')
+        values=clean(values[int(body.start*sr):int(body.end*sr)],sr)
+        if len(values)/sr<=5:raise HTTPException(400,'Not enough speaking audio remains. Choose a longer clean section for Turbo.')
+        target=jobs.temporary/('clean-reference-'+str(uuid.uuid4())+'.wav')
+        sf.write(target,values,sr,subtype='PCM_16')
+        if body.denoise:
+            processed=target.with_suffix('.processed.wav')
+            try:audio_tools.process(target,processed,denoise=True,noise_strength=8);processed.replace(target)
+            finally:processed.unlink(missing_ok=True)
+        return FileResponse(target,media_type='audio/wav',background=BackgroundTask(target.unlink,missing_ok=True))
+
     @app.post('/api/profiles/{identity}/primary/{asset}')
     def primary(identity: str, asset: str):
         with lock:
@@ -441,7 +494,7 @@ def create_app(root=None, engine=None):
 
     @app.get('/api/health')
     def health():
-        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'70.1.2', 'build':'voicecraft-studio-70', 'recovery_warnings':jobs.recovery_warnings}
+        return {'application': 'ai-voice-cloning-studio-2', 'status': 'running', 'version':'70.2.0', 'build':'voicecraft-studio-70', 'recovery_warnings':jobs.recovery_warnings}
 
     @app.get('/api/system')
     def system_status():
@@ -521,6 +574,57 @@ def create_app(root=None, engine=None):
             return [jobs.submit(identity, {**settings, 'engine': name}, text=body.text.strip())
                     for name in ('expressive', 'turbo')]
 
+    @app.post('/api/profiles/{identity}/prepare-script')
+    def prepare_script(identity: str,body: Speech):
+        from .prosody import plan
+        settings=configured(identity,body.settings)
+        try:return plan(body.text,settings['pronunciations'])
+        except ValueError as exc:raise HTTPException(400,str(exc))
+
+    @app.post('/api/profiles/{identity}/candidates')
+    def candidates(identity: str,body: Candidates):
+        if not body.text.strip():raise HTTPException(400,'Enter a narration script.')
+        settings=configured(identity,body.settings);ready(settings['engine'])
+        with lock:
+            if sum(j['status'] in ('queued','running') for j in jobs.jobs.values())+body.count>20:raise HTTPException(409,'The queue does not have enough room for these candidates.')
+            try:
+                result=[]
+                for index in range(body.count):
+                    job=jobs.submit(identity,{**settings,'sampling_seed':secrets.randbelow(2147483647)},text=body.text.strip());jobs.jobs[job['id']]['label']='Candidate '+str(index+1)+' of '+str(body.count);jobs.save(jobs.jobs[job['id']]);result.append(job)
+                return result
+            except ValueError as exc:raise HTTPException(400,str(exc))
+
+    @app.post('/api/profiles/{identity}/compare-quality')
+    def compare_quality(identity: str,body: Speech):
+        if not body.text.strip():raise HTTPException(400,'Enter a narration script.')
+        settings=configured(identity,body.settings);ready(settings['engine'])
+        with lock:
+            if sum(j['status'] in ('queued','running') for j in jobs.jobs.values())>18:raise HTTPException(409,'The queue needs two free slots.')
+            seed=secrets.randbelow(2147483647)
+            try:
+                result=[]
+                for mode in ('standard','natural_studio'):
+                    job=jobs.submit(identity,{**settings,'quality_mode':mode,'sampling_seed':seed},text=body.text.strip());jobs.jobs[job['id']]['label']='Standard baseline' if mode=='standard' else 'Natural Studio comparison';jobs.save(jobs.jobs[job['id']]);result.append(job)
+                return result
+            except ValueError as exc:raise HTTPException(400,str(exc))
+
+    @app.post('/api/profiles/{identity}/generated/{asset}/select-take')
+    def select_take(identity: str,asset: str):
+        with lock:
+            generated(identity,asset);person=read(identity);person['preferred_generated']=asset;write(folder(identity),person);return {'selected':asset}
+
+    @app.post('/api/profiles/{identity}/generated/{asset}/regenerate-sentence')
+    def regenerate_sentence(identity: str,asset: str,body: SentenceRegeneration):
+        with lock:
+            generated(identity,asset);person=read(identity)
+            item=next(r for r in person['generated'] if r['id']==asset)
+            if not item.get('can_regenerate') or not (folder(identity)/'generated-audio'/(asset+'.segments')/'metadata.json').is_file():raise HTTPException(400,'Generate a full Natural Studio narration first; older outputs and edited copies do not have saved sentence audio.')
+            if body.sentence not in {part['sentence'] for part in item['segments']}:raise HTTPException(400,'Choose a sentence from this narration.')
+            settings={**item['settings'],'sampling_seed':secrets.randbelow(2147483647)};ready(settings['engine'])
+            try:
+                job=jobs.submit(identity,settings,text=item['text'],regenerate={'source':asset,'sentence':body.sentence,'reference':item['reference']});jobs.jobs[job['id']]['label']='Regenerated sentence '+str(body.sentence+1);jobs.save(jobs.jobs[job['id']]);return job
+            except ValueError as exc:raise HTTPException(400,str(exc))
+
     @app.post('/api/profiles/{identity}/generate')
     def generate(identity: str, body: Speech):
         settings=configured(identity,body.settings)
@@ -548,7 +652,12 @@ def create_app(root=None, engine=None):
 
     @app.get('/api/jobs')
     def job_list():
-        with lock:return list(reversed(list(jobs.jobs.values())))[:100]
+        with lock:
+            result=[dict(j) for j in reversed(list(jobs.jobs.values()))][:100]
+            for item in result:
+                if item['status']=='running' and item.get('started_at'):
+                    item['elapsed_seconds']=round(max(0,(datetime.now(timezone.utc)-datetime.fromisoformat(item['started_at'])).total_seconds()),1)
+            return result
 
     @app.post('/api/jobs/{identity}/cancel')
     def cancel(identity: str):
@@ -784,7 +893,7 @@ def create_app(root=None, engine=None):
             item=next(r for r in person['generated'] if r['id']==asset)
             new_id=str(uuid.uuid4());target=folder(identity)/'generated-audio'/(new_id+'.wav')
             audio_tools.process(source,target,**body.model_dump())
-            result={**item,'id':new_id,'name':'Edited '+item.get('name','Voiceover'),'created_at':datetime.now(timezone.utc).isoformat(),'seconds':round(sf.info(target).duration,2),'edited_from':asset,'adjustments':body.model_dump()}
+            result={**item,'id':new_id,'name':'Edited '+(item.get('name') or 'Voiceover'),'created_at':datetime.now(timezone.utc).isoformat(),'seconds':round(sf.info(target).duration,2),'edited_from':asset,'adjustments':body.model_dump(),'can_regenerate':False}
             person['generated'].append(result);write(folder(identity),person)
             return result
 
@@ -858,11 +967,14 @@ def create_app(root=None, engine=None):
         for asset in selected:
             try:asset=str(uuid.UUID(asset))
             except ValueError:raise HTTPException(400,'Invalid audio identity')
-            paths.extend([folder(identity)/'generated-audio'/(asset+'.wav'),folder(identity)/'generated-audio'/(asset+'.mp3')])
+            paths.extend([folder(identity)/'generated-audio'/(asset+'.wav'),folder(identity)/'generated-audio'/(asset+'.mp3'),folder(identity)/'generated-audio'/(asset+'.segments')])
         forgotten=[key for key,job in jobs.jobs.items() if job['profile']==identity and job['kind'] in ('speech','conversion') and (ids is None or key in selected)]
         person['generated']=[item for item in person['generated'] if item['id'] not in selected]
+        if person.get('preferred_generated') in selected:person['preferred_generated']=None
         write(folder(identity),person)
-        for path in paths:path.unlink(missing_ok=True)
+        for path in paths:
+            if path.is_dir():shutil.rmtree(path)
+            else:path.unlink(missing_ok=True)
         for key in forgotten:
             (jobs.directory/(key+'.json')).unlink(missing_ok=True)
             jobs.jobs.pop(key,None);jobs.cancelled.discard(key)

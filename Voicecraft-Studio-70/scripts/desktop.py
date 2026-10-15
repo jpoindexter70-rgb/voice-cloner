@@ -74,14 +74,15 @@ def run(command):
     print('Preparing local engine packages. This can take several minutes on first use.',flush=True)
     subprocess.run(command,check=True,cwd=APP)
 
-def engine_main():
+def main():
     if '--check-runtime' in sys.argv:
         assert sys.version_info[:2]==(3,11) and sys.maxsize>2**32
         print('VOICECRAFT_RUNTIME_OK',flush=True);return
     os.environ['PYTHONUTF8']='1'
     for name in ('STUDIO2_PUBLIC_ORIGIN','STUDIO2_PASSWORD','STUDIO2_BACKUP_REPO','STUDIO2_BACKUP_TOKEN'):os.environ.pop(name,None)
+    desktop=desktop_runtime()
     config=configuration();data=Path(config['data_directory']);data.mkdir(parents=True,exist_ok=True)
-    os.environ['STUDIO2_DATA_DIR']=str(data);os.environ['PORT']=os.getenv('VOICECRAFT_ENGINE_PORT','8791')
+    os.environ['STUDIO2_DATA_DIR']=str(data);os.environ['PORT']='8791'
     for name,folder in [('HF_HOME','model-cache'),('NUMBA_CACHE_DIR','numba-cache'),('PIP_CACHE_DIR','pip-cache'),('TMP','temporary'),('TEMP','temporary'),('TMPDIR','temporary')]:
         target=data/folder;target.mkdir(exist_ok=True);os.environ[name]=str(target)
     from importlib.metadata import version,PackageNotFoundError
@@ -89,6 +90,9 @@ def engine_main():
     for package,expected in [('fastapi','0.115.12'),('uvicorn','0.34.2'),('soundfile','0.13.1'),('chatterbox-tts','0.1.7'),('munch','4.0.0')]:
         try:ready=ready and version(package)==expected
         except PackageNotFoundError:ready=False
+    if ready:
+        check=subprocess.run([sys.executable,'-c',"import torch,torchaudio,soundfile,fastapi,uvicorn,numpy; from chatterbox.tts_turbo import ChatterboxTurboTTS; from chatterbox.tts import ChatterboxTTS; assert torch.__version__.split('+')[0]=='2.6.0'; assert torchaudio.__version__.split('+')[0]=='2.6.0'"],capture_output=True,cwd=APP)
+        ready=check.returncode==0
     if not ready:
         print('VOICECRAFT_SETUP_REQUIRED',flush=True)
         cuda=False
@@ -104,30 +108,17 @@ def engine_main():
             run([sys.executable,'-m','pip','install','--disable-pip-version-check','torch==2.6.0','torchaudio==2.6.0','--index-url','https://download.pytorch.org/whl/cpu'])
         run([sys.executable,'-m','pip','install','--disable-pip-version-check','-r',str(APP/'requirements-runtime.txt'),'-c',str(APP/'requirements-windows-lock.txt')])
         run([sys.executable,'-m','pip','check'])
+    from studio.models import verify,download
+    model_root=data/'shared-models'
+    for name in ('turbo','expressive'):
+        try:verify(model_root,name);print('Reusing verified '+name+' models.',flush=True)
+        except (OSError,ValueError,KeyError,RuntimeError):
+            print('VOICECRAFT_SETUP_REQUIRED',flush=True)
+            print('Preparing '+name+' models. Official downloads require internet; your recordings stay on this computer.',flush=True)
+            download(model_root,name)
     from studio.app import create_app
     import uvicorn
-    app=create_app(data)
-    app.state.startup={'ready':False,'message':'Voice engine starting. Profiles, recording and scripts are available.'}
-    def prepare_engine():
-        try:
-            for package in ('torch','torchaudio'):
-                if version(package).split('+')[0]!='2.6.0':raise RuntimeError('AI package version mismatch. Reinstall the application runtime.')
-            from studio.models import verify,download
-            model_root=data/'shared-models'
-            for name in ('turbo','expressive'):
-                try:verify(model_root,name)
-                except (OSError,ValueError,KeyError,RuntimeError):
-                    app.state.startup['message']='Installing '+name+' models. Your recordings stay on this computer.'
-                    download(model_root,name)
-            app.state.startup['message']='Loading Chatterbox Turbo for your first preview.'
-            app.state.voice_engine.load('turbo')
-            app.state.jobs.last_activity=time.monotonic()
-            app.state.startup={'ready':True,'message':'Voice engine ready.'}
-        except Exception as error:
-            import traceback
-            traceback.print_exc()
-            app.state.startup={'ready':False,'failed':True,'message':str(error)}
-    server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=int(os.environ['PORT']),log_level='warning'))
+    app=create_app(data);server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=8791,log_level='warning'))
     app.state.shutdown=lambda:setattr(server,'should_exit',True)
     worker=threading.Thread(target=server.run,name='voicecraft-local-engine',daemon=True)
     worker.start()
@@ -138,37 +129,12 @@ def engine_main():
     else:
         server.should_exit=True
         raise RuntimeError('Local engine startup timed out.')
-    threading.Thread(target=prepare_engine,name='voicecraft-engine-startup',daemon=True).start()
-    print('VOICECRAFT_BACKEND_READY',flush=True)
+    print('VOICECRAFT_READY',flush=True)
     try:
-        while worker.is_alive():time.sleep(.1)
+        subprocess.run([str(desktop)],check=True,cwd=desktop.parent)
     finally:
         server.should_exit=True
         worker.join(timeout=20)
-
-def main():
-    if '--check-runtime' in sys.argv:
-        assert sys.version_info[:2]==(3,11) and sys.maxsize>2**32
-        print('VOICECRAFT_RUNTIME_OK',flush=True);return
-    if '--engine-process' in sys.argv:return engine_main()
-    desktop=desktop_runtime()
-    # The desktop is visible before any torch import, model check or engine startup.
-    window=subprocess.Popen([str(desktop)],cwd=desktop.parent)
-    engine=None
-    try:
-        print('VOICECRAFT_READY',flush=True)
-        engine=subprocess.Popen([sys.executable,'-u','-X','utf8',str(APP/'scripts/desktop.py'),'--engine-process'],cwd=APP)
-        while window.poll() is None:
-            if engine.poll() is not None:
-                raise RuntimeError('Local engine startup stopped. See the diagnostic details above.')
-            time.sleep(.1)
-        if window.returncode:raise subprocess.CalledProcessError(window.returncode,[str(desktop)])
-    finally:
-        for process in (window,engine):
-            if process is not None and process.poll() is None:
-                process.terminate()
-                try:process.wait(timeout=10)
-                except subprocess.TimeoutExpired:process.kill();process.wait()
 
 if __name__=='__main__':
     try:main()

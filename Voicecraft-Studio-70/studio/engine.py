@@ -64,6 +64,11 @@ class VoiceEngine:
         if self.name==name and self.device==chosen and self.model is not None:return
         self.unload(reset_fallback=False);self.message='Verifying and loading '+name+' on '+chosen
         started=time.monotonic()
+        from .system import memory_bytes
+        _,available=memory_bytes()
+        required=(8 if name=='expressive' else 4)*1024**3
+        if available is not None and available<required:
+            raise RuntimeError('Not enough free system RAM for a safe '+name+' model load. Close other applications'+(' or select Chatterbox Turbo' if name=='expressive' else '')+'. This is a conservative safety threshold, not a measured GPU requirement.')
         path=self.root if name=='seed' else verify(self.root,name)
         # from_local only reads verified checkpoint directories. Keep the separate private-backup client online.
         os.environ['TRANSFORMERS_OFFLINE']='1'
@@ -96,17 +101,21 @@ class VoiceEngine:
         import torch
         name=settings['engine'];self.load(name,settings['device'])
         options={'temperature':settings['temperature']}
+        if settings.get('quality_mode')=='natural_studio':options.update(repetition_penalty=1.2,top_p=.95)
         if name=='expressive':options.update(exaggeration=settings['expression'],cfg_weight=settings['similarity'])
-        try:
-            with torch.inference_mode():
+        def generate():
+            seed=settings.get('sampling_seed')
+            devices=list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+            with torch.random.fork_rng(devices=devices,enabled=seed is not None),torch.inference_mode():
+                if seed is not None:torch.manual_seed(seed)
                 self.prepare_reference(reference,settings)
-                audio=self.model.generate(text,**options)
+                return self.model.generate(text,**options)
+        try:
+            audio=generate()
         except torch.cuda.OutOfMemoryError:
             if settings['device']!='auto':raise
             self.unload(reset_fallback=False);self._cpu_fallback.add(name);self.load(name,'cpu')
-            with torch.inference_mode():
-                self.prepare_reference(reference,settings)
-                audio=self.model.generate(text,**options)
+            audio=generate()
         values=audio.detach().cpu().numpy().reshape(-1)
         if len(values)==0 or not np.isfinite(values).all():raise RuntimeError('Engine returned invalid audio')
         return values,int(self.model.sr)

@@ -36,80 +36,42 @@ def test_renderer_rejects_wrong_hash(desktop,monkeypatch):
     with pytest.raises(RuntimeError,match='checksum mismatch'):module.desktop_runtime()
     assert not (Path(module.os.environ['LOCALAPPDATA'])/'Voicecraft-Studio-70/desktop-window/Voicecraft70Window.exe').exists()
 
-@pytest.mark.parametrize('engine_fails',[False,True])
-def test_window_launches_before_engine_and_closing_stops_both(desktop,monkeypatch,engine_fails):
-    module,app=desktop
-    monkeypatch.setattr(module.sys,'argv',['desktop.py'])
-    executable=app/'Voicecraft70Window.exe'
-    monkeypatch.setattr(module,'desktop_runtime',lambda:executable)
-    calls=[]
-    class Process:
-        def __init__(self,command,**kwargs):
-            self.command=command;self.returncode=None;self.terminated=False;self.polls=0;calls.append(self)
-        def poll(self):
-            self.polls+=1
-            if self.command==[str(executable)] and not engine_fails and self.polls>2:self.returncode=0
-            if '--engine-process' in self.command and engine_fails:self.returncode=1
-            return self.returncode
-        def terminate(self):self.terminated=True;self.returncode=0
-        def wait(self,**kwargs):return self.returncode
-    monkeypatch.setattr(module.subprocess,'Popen',Process)
-    if engine_fails:
-        with pytest.raises(RuntimeError,match='startup stopped'):module.main()
-    else:module.main()
-    assert calls[0].command==[str(executable)]
-    assert '--engine-process' in calls[1].command
-    assert all(p.returncode is not None for p in calls)
-    assert calls[0 if engine_fails else 1].terminated
-
+@pytest.mark.parametrize('window_fails',[False,True])
 @pytest.mark.parametrize('models_missing',[False,True])
-@pytest.mark.parametrize('load_fails',[False,True])
-def test_interface_starts_before_model_checks_and_preloads_turbo(desktop,monkeypatch,models_missing,load_fails):
+def test_window_lifecycle_stops_engine_without_browser(desktop,monkeypatch,window_fails,models_missing,capsys):
     module,app=desktop
-    import importlib.metadata,types,uvicorn,studio.app,studio.models,time
-    versions={'fastapi':'0.115.12','uvicorn':'0.34.2','soundfile':'0.13.1','chatterbox-tts':'0.1.7','munch':'4.0.0','torch':'2.6.0','torchaudio':'2.6.0'}
+    import importlib.metadata,types,uvicorn,studio.app,studio.models,webbrowser,time
+    monkeypatch.setattr(module.sys,'argv',['desktop.py'])
+    executable=app/'Voicecraft70Window.exe';executable.write_bytes(b'fixture')
+    monkeypatch.setattr(module,'desktop_runtime',lambda:executable)
+    versions={'fastapi':'0.115.12','uvicorn':'0.34.2','soundfile':'0.13.1','chatterbox-tts':'0.1.7','munch':'4.0.0'}
     monkeypatch.setattr(importlib.metadata,'version',lambda package:versions[package])
-    servers=[];events=[]
-    class Engine:
-        def load(self,name):
-            assert servers[0].started;events.append(('load',name))
-            if load_fails:raise RuntimeError('Fixture model load failure')
-    application=types.SimpleNamespace(state=types.SimpleNamespace(voice_engine=Engine(),jobs=types.SimpleNamespace(last_activity=0)))
-    monkeypatch.setattr(studio.app,'create_app',lambda *args:application)
-    def verify(root,name):
-        assert servers[0].started;events.append(('verify',name))
-        if models_missing:raise RuntimeError('Missing fixture model')
+    downloads=[]
+    def verify(*args):
+        if models_missing:raise RuntimeError('Fixture model is missing')
     monkeypatch.setattr(studio.models,'verify',verify)
-    monkeypatch.setattr(studio.models,'download',lambda root,name:events.append(('download',name)))
+    monkeypatch.setattr(studio.models,'download',lambda root,name:downloads.append(name))
+    monkeypatch.setattr(studio.app,'create_app',lambda *args:types.SimpleNamespace(state=types.SimpleNamespace()))
+    monkeypatch.setattr(webbrowser,'open',lambda *args:pytest.fail('A standalone launch must not open a browser'))
+    servers=[]
     class Server:
-        def __init__(self,config):self.started=False;self.should_exit=False;self.config=config;servers.append(self)
+        def __init__(self,config):self.started=False;self.should_exit=False;self.stopped=False;self.config=config;servers.append(self)
         def run(self):
             self.started=True
-            while not self.should_exit:
-                if application.state.startup.get('ready') or application.state.startup.get('failed'):return
-                time.sleep(.005)
+            while not self.should_exit:time.sleep(.005)
+            self.stopped=True
     monkeypatch.setattr(uvicorn,'Server',Server)
-    module.engine_main()
-    assert application.state.startup['ready']==(not load_fails)
-    if load_fails:assert application.state.startup['failed'] and 'model load failure' in application.state.startup['message']
-    assert ('load','turbo') in events
-    assert ('download','turbo') in events if models_missing else not any(e[0]=='download' for e in events)
-    assert servers[0].should_exit
-
-
-def test_starting_engine_blocks_generation_but_not_profiles(tmp_path):
-    from tests.test_jobs import AdapterFixture,open_client,person,wait
-    client=open_client(tmp_path,AdapterFixture());profile=person(client)
-    try:
-        client.app.state.startup={'ready':False,'message':'Voice engine starting.'}
-        assert client.get('/api/startup').json()['ready'] is False
-        assert client.get('/api/profiles').status_code==200
-        body={'text':'Startup gate test','settings':profile['settings'],'seconds':5}
-        assert client.post('/api/profiles/'+profile['id']+'/preview',json=body).status_code==503
-        assert client.post('/api/engine/setup/turbo').status_code==409
-        assert client.post('/api/engine/unload').status_code==409
-        client.app.state.startup={'ready':True,'message':'Ready'}
-        job=client.post('/api/profiles/'+profile['id']+'/preview',json=body)
-        assert job.status_code==200,job.text
-        assert wait(client,job.json())['status']=='completed'
-    finally:client.close()
+    calls=[]
+    def run(command,**kwargs):
+        calls.append(command)
+        if command==[str(executable)] and window_fails:raise module.subprocess.CalledProcessError(1,command)
+        return types.SimpleNamespace(returncode=0)
+    monkeypatch.setattr(module.subprocess,'run',run)
+    if window_fails:
+        with pytest.raises(module.subprocess.CalledProcessError):module.main()
+    else:module.main()
+    assert servers[0].stopped and servers[0].should_exit
+    assert servers[0].config.host=='127.0.0.1' and servers[0].config.port==8791
+    assert [str(executable)] in calls
+    assert ('VOICECRAFT_SETUP_REQUIRED' in capsys.readouterr().out)==models_missing
+    assert downloads==(['turbo','expressive'] if models_missing else [])

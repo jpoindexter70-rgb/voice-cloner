@@ -11,6 +11,8 @@ import soundfile as sf
 from .engine import split_text
 from .audio import process, voice_processing, needs_processing
 from .styles import effective
+from . import prosody
+import shutil
 
 
 def now():return datetime.now(timezone.utc).isoformat()
@@ -55,21 +57,24 @@ class Jobs:
                 return True
         return False
 
-    def submit(self,profile,settings,text=None,source=None,kind=None,steps=100,block=.5,adaptation=None,preview_seconds=None):
+    def submit(self,profile,settings,text=None,source=None,kind=None,steps=100,block=.5,adaptation=None,preview_seconds=None,regenerate=None):
         with self.lock:
             self.last_activity=time.monotonic()
             if self.live:raise ValueError('Stop live conversion before queuing another model operation.')
             person=self.read(profile);self.allowed(person)
             if not person['primary_reference']:raise ValueError('Add a clean authorized voice reference first.')
-            record=next(r for r in person['recordings'] if r['id']==person['primary_reference'])
+            reference_id=regenerate['reference'] if regenerate else person['primary_reference']
+            record=next((r for r in person['recordings'] if r['id']==reference_id),None)
+            if record is None:raise ValueError('The original authorized reference is no longer available.')
+            if settings.get('quality_mode')=='natural_studio' and text is not None and record['quality']['seconds']>20:raise ValueError('For Natural Studio Quality, preview and select a clean 5.1–20 second section using Prepare a clean voice reference. Your full original remains saved.')
             if settings['engine']=='turbo' and text is not None and record['quality']['seconds']<=5:raise ValueError('Turbo needs a reference longer than 5 seconds.')
             if text is not None and person['language'].strip().lower() not in ('english','en'):raise ValueError('The installed engines generate English. Choose English or use recorded voice conversion.')
             if self.active() and sum(j['status'] in ('queued','running') for j in self.jobs.values())>=20:raise ValueError('Queue is full. Wait for current jobs or cancel them.')
-            job={'id':str(uuid.uuid4()),'profile':profile,'profile_name':person['name'],'reference':person['primary_reference'],
+            job={'id':str(uuid.uuid4()),'profile':profile,'profile_name':person['name'],'reference':reference_id,
                  'settings':settings,'kind':kind or ('conversion' if source is not None else 'speech'),'text':text,'status':'queued',
                  'progress':0,'created_at':now(),'error':None,'result':None,'elapsed_seconds':0,'training_steps':steps,'block_seconds':block,
                  'recordings':[r['id'] for r in person['recordings']],
-                 'adaptation':adaptation if adaptation is not None else person.get('active_adaptation'),'preview_seconds':preview_seconds}
+                 'regenerate':regenerate,'adaptation':adaptation if adaptation is not None else person.get('active_adaptation'),'preview_seconds':preview_seconds}
             self.jobs[job['id']]=job;self.save(job)
             if source is not None:(self.temporary/(job['id']+'.source.wav')).write_bytes(source)
             self.executor.submit(self.run,job['id'])
@@ -84,7 +89,7 @@ class Jobs:
         job=self.jobs[identity];started=time.monotonic();work=self.temporary/(identity+'.work.wav')
         source=self.temporary/(identity+'.source.wav')
         try:
-            self.permitted(job);job.update(status='running',phase='Loading voice engine');self.save(job)
+            self.permitted(job);job.update(status='running',phase='Loading voice engine',started_at=now());self.save(job)
             reference=self.folder(job['profile'])/'references'/job['reference']
             if not reference.exists():raise ValueError('The saved reference is missing. Select another recording.')
             if job['kind'] in ('adaptation','benchmark'):
@@ -93,13 +98,38 @@ class Jobs:
                 self.permitted(job);values,sr=self.engine.convert(source,reference,self.conversion_settings(job));self.permitted(job)
                 job['progress']=90;job['phase']='Finalizing converted audio';self.save(job)
             else:
-                parts=split_text(job['text']);values=[];sr=24000
-                for index,text in enumerate(parts):
-                    self.permitted(job);job['phase']=f'Generating segment {index+1} of {len(parts)}';self.save(job)
-                    clip,sr=self.engine.synthesize(text,reference,effective(job['settings']));self.permitted(job)
-                    if len(values):values.append(np.zeros(int(sr*effective(job['settings'])['pause']),dtype=np.float32))
-                    values.append(clip);job['progress']=round(90*(index+1)/len(parts));job['elapsed_seconds']=round(time.monotonic()-started,1);self.save(job)
-                values=np.concatenate(values)
+                natural=job['settings'].get('quality_mode')=='natural_studio'
+                prepared=prosody.plan(job['text'],job['settings'].get('pronunciations')) if natural else None
+                segments=prepared['segments'] if natural else [{'text':t} for t in split_text(job['text'])]
+                values=[];sr=24000;segment_starts=[]
+                retained=self.folder(job['profile'])/'generated-audio'/(identity+'.segments')
+                keep=natural and not job.get('preview_seconds')
+                if keep:retained.mkdir()
+                regeneration=job.get('regenerate')
+                source_segments=None
+                if regeneration:
+                    prior=self.folder(job['profile'])/'generated-audio'/(regeneration['source']+'.segments')
+                    source_segments=json.loads((prior/'metadata.json').read_text())
+                    if [s['text'] for s in source_segments['segments']]!=[s['text'] for s in segments]:raise ValueError('Saved script segments no longer match. Generate a new full narration.')
+                for index,segment in enumerate(segments):
+                    self.permitted(job);job['phase']=f'Generating segment {index+1} of {len(segments)}';self.save(job)
+                    if regeneration and segment['sentence']!=regeneration['sentence']:
+                        clip,rate=sf.read(prior/(str(index)+'.wav'),dtype='float32');sr=rate
+                    else:
+                        options=effective(job['settings'])
+                        if options.get('sampling_seed') is not None:options['sampling_seed']=(options['sampling_seed']+index)%2147483647
+                        clip,rate=self.engine.synthesize(segment['text'],reference,options)
+                        if index and rate!=sr:raise ValueError('Engine sample rate changed between segments.')
+                        sr=rate
+                    self.permitted(job)
+                    if len(clip)==0 or not np.isfinite(clip).all() or np.max(np.abs(clip))<.00001:raise ValueError('The engine returned an invalid or silent segment. Choose another take or clean reference.')
+                    if keep:sf.write(retained/(str(index)+'.wav'),clip,sr,subtype='FLOAT')
+                    if not natural and len(values):values.append(np.zeros(int(sr*effective(job['settings'])['pause']),dtype=np.float32))
+                    values.append(clip);job['progress']=round(90*(index+1)/len(segments));job['elapsed_seconds']=round(time.monotonic()-started,1);self.save(job)
+                if natural:
+                    values,segment_starts=prosody.join(values,sr,segments,effective(job['settings'])['pause'])
+                    if keep:(retained/'metadata.json').write_text(json.dumps({'sample_rate':sr,'segments':segments,'reference':job['reference']},indent=2))
+                else:values=np.concatenate(values)
             if len(values)==0 or not np.isfinite(values).all():raise ValueError('The engine returned invalid audio.')
             sf.write(work,values,sr,subtype='PCM_16')
             with self.lock:
@@ -114,6 +144,10 @@ class Jobs:
                         'reference':job['reference'],'settings':job['settings'],'effective_settings':settings,'seconds':round(sf.info(target).duration,2),
                         'engine':self.engine.name,'device':self.engine.device,'preview':bool(job.get('preview_seconds')),'rating':None,'ai_generated':True,'adaptation':job.get('adaptation') if job['kind']=='conversion' and settings.get('conversion_engine')=='seed' else None}
 
+                if job.get('label'):result['name']=job['label']
+                if job['kind']=='speech' and job['settings'].get('quality_mode')=='natural_studio':
+                    result.update(prepared_text=prepared['prepared_text'],segments=segments,can_regenerate=keep,regenerated_sentence=(job.get('regenerate') or {}).get('sentence'),regenerated_from=(job.get('regenerate') or {}).get('source'))
+
                 elapsed = time.monotonic() - started
                 result['processing_seconds'] = round(elapsed, 2)
                 result['realtime_factor'] = round(elapsed / max(sf.info(target).duration, .001), 3)
@@ -125,6 +159,8 @@ class Jobs:
                 job.update(status='cancelled' if identity in self.cancelled or isinstance(exc,InterruptedError) else 'failed',error=str(exc),elapsed_seconds=round(time.monotonic()-started,1));self.save(job)
             self.engine.message='Job failed: '+str(exc)
         finally:
+            if job['status']!='completed':
+                shutil.rmtree(self.root/'family-profiles'/job['profile']/'generated-audio'/(identity+'.segments'),ignore_errors=True)
             for path in (work,source):path.unlink(missing_ok=True)
             # Remove conditioning after revocation or cancellation before another identity uses the engine.
             with self.lock:

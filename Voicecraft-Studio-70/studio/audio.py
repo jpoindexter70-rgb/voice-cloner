@@ -21,7 +21,7 @@ def decode(payload, temporary=None):
         with tempfile.TemporaryDirectory(prefix='studio2-decode-', dir=temporary) as temp:
             source=Path(temp)/'source';target=Path(temp)/'decoded.wav';source.write_bytes(payload)
             result=subprocess.run([ffmpeg(),'-v','error','-nostdin','-y','-i',str(source),'-t','121','-ac','1','-ar','24000',str(target)],capture_output=True,timeout=45)
-            if result.returncode or not target.exists():raise ValueError('This audio format cannot be decoded; use WAV, FLAC, MP3 or a browser recording.')
+            if result.returncode or not target.exists():raise ValueError('This audio format cannot be decoded; use WAV, FLAC, MP3, M4A, MP4 with audio, or a browser recording.')
             return sf.read(target,dtype='float32',always_2d=True)
 
 

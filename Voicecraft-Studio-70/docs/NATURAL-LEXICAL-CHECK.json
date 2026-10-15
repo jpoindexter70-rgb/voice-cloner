@@ -1,0 +1,42 @@
+[
+  {
+    "name": "Standard baseline",
+    "engine": "turbo",
+    "quality_mode": "standard",
+    "text_expected": "Why does a CPU need 32 GB? Voicecraft explains it.",
+    "automatic_transcript": " Why does the CPU need 32 G bytes? Boyscraft explains it.",
+    "note": "Small local ASR model; errors are not proof of TTS word errors or perceptual quality."
+  },
+  {
+    "name": "Natural Studio comparison",
+    "engine": "turbo",
+    "quality_mode": "natural_studio",
+    "text_expected": "Why does a C P U need thirty two gigabytes? voice craft explains it.",
+    "automatic_transcript": " Why does a CPU need 32 gigabytes? Voicecraft explains it.",
+    "note": "Small local ASR model; errors are not proof of TTS word errors or perceptual quality."
+  },
+  {
+    "name": "Candidate 1 of 2",
+    "engine": "expressive",
+    "quality_mode": "natural_studio",
+    "text_expected": "Why does a C P U need thirty two gigabytes? voice craft explains it.",
+    "automatic_transcript": " Why does a CPU need 32 gigabytes? Voicecraft explains it.",
+    "note": "Small local ASR model; errors are not proof of TTS word errors or perceptual quality."
+  },
+  {
+    "name": "Candidate 2 of 2",
+    "engine": "expressive",
+    "quality_mode": "natural_studio",
+    "text_expected": "Why does a C P U need thirty two gigabytes? voice craft explains it.",
+    "automatic_transcript": " Why does a CPU need 32 gigabytes? Voicecraft explains it.",
+    "note": "Small local ASR model; errors are not proof of TTS word errors or perceptual quality."
+  },
+  {
+    "name": "Regenerated sentence 2",
+    "engine": "expressive",
+    "quality_mode": "natural_studio",
+    "text_expected": "Why does a C P U need thirty two gigabytes? voice craft explains it.",
+    "automatic_transcript": " Why does a CPU need 32 gigabytes? Voicecraft explains it.",
+    "note": "Small local ASR model; errors are not proof of TTS word errors or perceptual quality."
+  }
+]
